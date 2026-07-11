@@ -10,7 +10,7 @@ import {
   stat,
 } from 'node:fs/promises'
 import path from 'node:path'
-import type { ZodType } from 'zod'
+import type { ZodType, ZodTypeDef } from 'zod'
 import {
   AnnotationSchema,
   AnnotationStylesPatchSchema,
@@ -43,7 +43,9 @@ import {
   type UpdateGroupInput,
   type UpdateProjectInput,
 } from '../shared/models'
+import { isAnnotationTypeAllowed } from '../shared/annotation-rules'
 import { AppError, normalizeError } from './errors'
+import { migrateAnnotationsForTextChange } from '../shared/text-migration'
 
 const DEFAULT_GROUP_COLOR = '#64748B'
 const MAX_IMPORT_BYTES = 25 * 1024 * 1024
@@ -84,7 +86,7 @@ async function atomicWriteJson(filePath: string, value: unknown): Promise<void> 
 
 async function readValidatedJson<T>(
   filePath: string,
-  schema: ZodType<T>,
+  schema: ZodType<T, ZodTypeDef, unknown>,
   description: string,
 ): Promise<T> {
   let parsed: unknown
@@ -253,10 +255,15 @@ export class JsonRepository {
       const groupId = validatedPatch.groupId === undefined ? previous.groupId : validatedPatch.groupId
       this.assertGroupExists(library, groupId)
       const now = nowIso()
+      const originalText = validatedPatch.originalText ?? previous.originalText
+      const annotations = validatedPatch.originalText === undefined
+        ? previous.annotations
+        : migrateAnnotationsForTextChange(previous.annotations, previous.originalText, originalText, now).annotations
       const project = ProjectDocumentSchema.parse({
         ...previous,
         metadata: { ...previous.metadata, ...validatedPatch.metadata },
-        originalText: validatedPatch.originalText ?? previous.originalText,
+        originalText,
+        annotations,
         groupId,
         updatedAt: now,
       })
@@ -406,10 +413,17 @@ export class JsonRepository {
       const validatedInput = CreateAnnotationInputSchema.parse(input)
       const library = await this.readLibraryUnlocked()
       const previous = await this.requireProjectUnlocked(library, projectId)
+      this.assertAnnotationType(validatedInput.target.kind, validatedInput.type)
       const now = nowIso()
       let annotationId = randomUUID()
       while (previous.annotations.some((annotation) => annotation.id === annotationId)) annotationId = randomUUID()
-      const annotation = AnnotationSchema.parse({ id: annotationId, ...validatedInput, createdAt: now, updatedAt: now })
+      const annotation = AnnotationSchema.parse({
+        id: annotationId,
+        ...validatedInput,
+        target: { ...validatedInput.target, status: 'valid' },
+        createdAt: now,
+        updatedAt: now,
+      })
       const project = ProjectDocumentSchema.parse({
         ...previous,
         annotations: [...previous.annotations, annotation],
@@ -439,6 +453,7 @@ export class JsonRepository {
         ...validatedPatch,
         updatedAt: nowIso(),
       })
+      this.assertAnnotationType(annotation.target.kind, annotation.type)
       const annotations = [...previous.annotations]
       annotations[annotationIndex] = annotation
       const project = ProjectDocumentSchema.parse({ ...previous, annotations, updatedAt: annotation.updatedAt })
@@ -510,6 +525,9 @@ export class JsonRepository {
   importSharePackage(value: unknown): Promise<ImportResult> {
     return this.enqueue(async () => {
       const sharePackage = SharePackageSchema.parse(value)
+      sharePackage.project.annotations.forEach((annotation) => {
+        this.assertAnnotationType(annotation.target.kind, annotation.type)
+      })
       const library = await this.readLibraryUnlocked()
       const now = nowIso()
       let groupId: string | null = null
@@ -590,6 +608,15 @@ export class JsonRepository {
   private assertGroupExists(library: Library, groupId: string | null): void {
     if (groupId && !library.groups.some((group) => group.id === groupId)) {
       throw new AppError('NOT_FOUND', '所选分组不存在')
+    }
+  }
+
+  private assertAnnotationType(
+    kind: Annotation['target']['kind'],
+    type: Annotation['type'],
+  ): void {
+    if (!isAnnotationTypeAllowed(kind, type)) {
+      throw new AppError('VALIDATION', '所选批注类型不适用于当前的字、词或句粒度')
     }
   }
 

@@ -143,6 +143,73 @@ describe('JsonRepository', () => {
     expect((await repository.listProjects()).find((item) => item.id === project.id)?.annotationCount).toBe(3)
   })
 
+  it('按照字、词、句粒度拒绝不适用的批注类型', async () => {
+    const repository = await initializedRepository()
+    const originalText = '学而时习之，不亦说乎？'
+    const project = await repository.createProject({
+      metadata: metadata('粒度类型规则'),
+      originalText,
+    })
+
+    await expect(repository.createAnnotation(project.id, {
+      type: 'special-sentence',
+      target: { kind: 'character', start: 0, end: 1, text: '学' },
+      content: '字不能标特殊句式。',
+    })).rejects.toMatchObject({ name: 'AppError', code: 'VALIDATION' })
+
+    await expect(repository.createAnnotation(project.id, {
+      type: 'phonetic-loan',
+      target: { kind: 'word', start: 2, end: 4, text: '时习' },
+      content: '词不能标通假字。',
+    })).rejects.toMatchObject({ name: 'AppError', code: 'VALIDATION' })
+
+    await expect(repository.createAnnotation(project.id, {
+      type: 'polysemy',
+      target: { kind: 'sentence', start: 0, end: originalText.length, text: originalText },
+      content: '句不能标一词多义。',
+    })).rejects.toMatchObject({ name: 'AppError', code: 'VALIDATION' })
+
+    expect((await repository.getProject(project.id)).annotations).toHaveLength(0)
+  })
+
+  it('修改原文时平移未受影响批注，并保留相交批注供重新定位', async () => {
+    const repository = await initializedRepository()
+    const project = await repository.createProject({
+      metadata: metadata('原文修订迁移'),
+      originalText: '甲乙丙丁戊己',
+    })
+    const before = await repository.createAnnotation(project.id, {
+      type: 'definition',
+      target: { kind: 'character', start: 0, end: 1, text: '甲' },
+      content: '修改区之前。',
+    })
+    const intersecting = await repository.createAnnotation(project.id, {
+      type: 'definition',
+      target: { kind: 'word', start: 1, end: 3, text: '乙丙' },
+      content: '与修改区相交。',
+    })
+    const after = await repository.createAnnotation(project.id, {
+      type: 'word-class',
+      target: { kind: 'word', start: 3, end: 5, text: '丁戊' },
+      content: '修改区之后。',
+    })
+
+    const updated = await repository.updateProject(project.id, { originalText: '甲乙新字丁戊己' })
+    const beforeUpdated = updated.annotations.find((item) => item.id === before.id)!
+    const intersectingUpdated = updated.annotations.find((item) => item.id === intersecting.id)!
+    const afterUpdated = updated.annotations.find((item) => item.id === after.id)!
+
+    expect(beforeUpdated.target).toMatchObject({ start: 0, end: 1, text: '甲', status: 'valid' })
+    expect(intersectingUpdated.target).toMatchObject({ start: 1, end: 3, text: '乙丙', status: 'needs-review' })
+    expect(afterUpdated.target).toMatchObject({ start: 4, end: 6, text: '丁戊', status: 'valid' })
+
+    await repository.updateAnnotation(project.id, intersecting.id, {
+      target: { kind: 'word', start: 2, end: 4, text: '新字', status: 'valid' },
+    })
+    expect((await repository.getProject(project.id)).annotations.find((item) => item.id === intersecting.id)?.target)
+      .toMatchObject({ start: 2, end: 4, text: '新字', status: 'valid' })
+  })
+
   it('拒绝倒置、越界或与原文不匹配的批注范围，并保持项目不变', async () => {
     const repository = await initializedRepository()
     const originalText = '学而时习之'

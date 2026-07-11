@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { isAnnotationTypeAllowed } from './annotation-rules'
 
 export const DATA_SCHEMA_VERSION = 1 as const
 export const SHARE_FORMAT_VERSION = 1 as const
@@ -111,6 +112,7 @@ export const AnnotationTargetSchema = z
     start: z.number().int().nonnegative(),
     end: z.number().int().positive(),
     text: z.string().min(1).max(20_000),
+    status: z.enum(['valid', 'needs-review']).default('valid'),
   })
   .strict()
   .superRefine((target, context) => {
@@ -172,7 +174,8 @@ export const ProjectDocumentSchema = z
       }
       ids.add(annotation.id)
 
-      const { start, end, text } = annotation.target
+      const { start, end, text, status } = annotation.target
+      if (status === 'needs-review') return
       if (end > project.originalText.length) {
         context.addIssue({
           code: z.ZodIssueCode.custom,
@@ -325,6 +328,14 @@ export const CreateAnnotationInputSchema = AnnotationSchema.omit({
   id: true,
   createdAt: true,
   updatedAt: true,
+}).superRefine((annotation, context) => {
+  if (!isAnnotationTypeAllowed(annotation.target.kind, annotation.type)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['type'],
+      message: `“${TARGET_KIND_LABELS[annotation.target.kind]}”批注不支持“${ANNOTATION_TYPE_LABELS[annotation.type]}”类型`,
+    })
+  }
 })
 
 export type CreateAnnotationInput = z.input<typeof CreateAnnotationInputSchema>

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
+import { ALLOWED_ANNOTATION_TYPES, isAnnotationTypeAllowed } from '@shared/annotation-rules';
 import { ANNOTATION_TYPES, TARGET_KINDS, annotationTypeMeta } from '../constants';
-import { CheckIcon, CloseIcon, ListIcon, NoteIcon, SearchIcon, SparkleIcon, StyleIcon, TrashIcon } from '../icons';
+import { CheckIcon, ChevronIcon, CloseIcon, ListIcon, NoteIcon, SearchIcon, SparkleIcon, StyleIcon, TrashIcon } from '../icons';
 import type { Annotation, AnnotationStyle, AnnotationType, Project, TargetKind, TextSelection } from '../types';
 
 type InspectorTab = 'editor' | 'list' | 'style';
@@ -12,6 +13,7 @@ interface AnnotationInput {
     start: number;
     end: number;
     text: string;
+    status: 'valid' | 'needs-review';
   };
   content: string;
 }
@@ -26,6 +28,10 @@ interface InspectorProps {
   onUpdateAnnotation: (id: string, input: AnnotationInput) => Promise<void>;
   onDeleteAnnotation: (id: string) => Promise<void>;
   onUpdateStyle: (type: AnnotationType, style: AnnotationStyle) => Promise<void>;
+  isRelinking: boolean;
+  onStartRelink: (id: string) => void;
+  onHide: () => void;
+  hidden?: boolean;
 }
 
 function inferKind(text: string): TargetKind {
@@ -44,6 +50,10 @@ export function Inspector({
   onUpdateAnnotation,
   onDeleteAnnotation,
   onUpdateStyle,
+  isRelinking,
+  onStartRelink,
+  onHide,
+  hidden = false,
 }: InspectorProps) {
   const [tab, setTab] = useState<InspectorTab>('editor');
   const [type, setType] = useState<AnnotationType>('definition');
@@ -55,6 +65,7 @@ export function Inspector({
   const [styleType, setStyleType] = useState<AnnotationType>('definition');
   const [styleDraft, setStyleDraft] = useState<AnnotationStyle>(project.styles.definition);
   const [styleSaving, setStyleSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
 
   useEffect(() => {
     if (activeAnnotation) {
@@ -62,11 +73,13 @@ export function Inspector({
       setType(activeAnnotation.type);
       setKind(activeAnnotation.target.kind);
       setContent(activeAnnotation.content);
+      setSaveError('');
     } else if (selection) {
       setTab('editor');
       setType('definition');
       setKind(inferKind(selection.text));
       setContent('');
+      setSaveError('');
     }
   }, [activeAnnotation, selection]);
 
@@ -74,7 +87,20 @@ export function Inspector({
     setStyleDraft(project.styles[styleType]);
   }, [project.id, project.styles, styleType]);
 
-  const target = activeAnnotation?.target ?? (selection ? { ...selection, kind } : null);
+  useEffect(() => {
+    if (!isAnnotationTypeAllowed(kind, type)) setType('definition');
+  }, [kind, type]);
+
+  useEffect(() => {
+    if (isRelinking && selection && kind === 'character' && [...selection.text].length !== 1) {
+      setKind(inferKind(selection.text));
+    }
+  }, [isRelinking, kind, selection]);
+
+  const target = isRelinking && selection
+    ? { ...selection, kind, status: 'valid' as const }
+    : activeAnnotation?.target ?? (selection ? { ...selection, kind, status: 'valid' as const } : null);
+  const allowedTypes = ALLOWED_ANNOTATION_TYPES[kind];
   const filteredAnnotations = useMemo(() => {
     const keyword = listQuery.trim().toLocaleLowerCase();
     return [...project.annotations]
@@ -84,19 +110,20 @@ export function Inspector({
   }, [listQuery, listType, project.annotations]);
 
   const submit = async () => {
-    if (!target || !content.trim() || saving) return;
+    if (!target || !content.trim() || saving || (isRelinking && !selection)) return;
     setSaving(true);
+    setSaveError('');
     const input: AnnotationInput = {
       type,
-      target: { kind, start: target.start, end: target.end, text: target.text },
+      target: { kind, start: target.start, end: target.end, text: target.text, status: target.status },
       content: content.trim(),
     };
     try {
       if (activeAnnotation) await onUpdateAnnotation(activeAnnotation.id, input);
       else await onCreateAnnotation(input);
       setContent('');
-    } catch {
-      // App 层统一展示持久化错误；此处保留草稿供用户重试。
+    } catch (reason) {
+      setSaveError(reason instanceof Error ? reason.message : '批注保存失败，请重试');
     } finally {
       setSaving(false);
     }
@@ -127,11 +154,12 @@ export function Inspector({
   };
 
   return (
-    <aside className="inspector">
+    <aside className={`inspector ${hidden ? 'is-pane-hidden' : ''}`}>
       <nav className="inspector-tabs">
         <button className={tab === 'editor' ? 'active' : ''} onClick={() => setTab('editor')}><NoteIcon size={16} />批注</button>
         <button className={tab === 'list' ? 'active' : ''} onClick={() => setTab('list')}><ListIcon size={16} />目录<span>{project.annotations.length}</span></button>
         <button className={tab === 'style' ? 'active' : ''} onClick={() => setTab('style')}><StyleIcon size={16} />样式</button>
+        <button className="inspector-collapse" onClick={onHide} title="隐藏批注区域" aria-label="隐藏批注区域"><ChevronIcon size={15} /></button>
       </nav>
 
       {tab === 'editor' && (
@@ -147,6 +175,18 @@ export function Inspector({
                 <span>“</span><p>{target.text}</p><span>”</span>
                 <footer>第 {target.start + 1}–{target.end} 字 · 共 {[...target.text].length} 字</footer>
               </blockquote>
+
+              {activeAnnotation?.target.status === 'needs-review' && !isRelinking && (
+                <div className="location-warning">
+                  <div><strong>这条批注需要重新定位</strong><span>原文修改与原标注范围相交，批注内容已安全保留。</span></div>
+                  <button onClick={() => onStartRelink(activeAnnotation.id)}>重新定位</button>
+                </div>
+              )}
+              {isRelinking && (
+                <div className={`location-warning relinking ${selection ? 'ready' : ''}`}>
+                  <div><strong>{selection ? '已选择新的位置' : '请在正文中重新选择'}</strong><span>{selection ? '确认粒度后点击保存修改。' : '批注内容不会丢失，选择后再保存即可。'}</span></div>
+                </div>
+              )}
 
               <div className="form-section">
                 <label className="field-label">标注范围</label>
@@ -167,7 +207,7 @@ export function Inspector({
               <div className="form-section">
                 <label className="field-label">批注类型</label>
                 <div className="annotation-type-grid">
-                  {ANNOTATION_TYPES.map((item) => (
+                  {ANNOTATION_TYPES.filter((item) => allowedTypes.includes(item.id)).map((item) => (
                     <button
                       key={item.id}
                       className={type === item.id ? 'active' : ''}
@@ -198,8 +238,9 @@ export function Inspector({
 
               <div className="editor-actions">
                 {activeAnnotation && <button className="danger-button" onClick={remove} disabled={saving}><TrashIcon size={16} />删除</button>}
-                <button className="save-button" onClick={submit} disabled={!content.trim() || saving}>{saving ? '保存中…' : activeAnnotation ? '保存修改' : '添加批注'}</button>
+                <button className="save-button" onClick={submit} disabled={!content.trim() || saving || (isRelinking && !selection)}>{saving ? '保存中…' : isRelinking ? '保存新位置' : activeAnnotation ? '保存修改' : '添加批注'}</button>
               </div>
+              {saveError && <div className="form-error annotation-save-error">{saveError}</div>}
             </>
           ) : (
             <div className="inspector-empty">
@@ -230,10 +271,10 @@ export function Inspector({
               const meta = annotationTypeMeta(annotation.type);
               const style = project.styles[annotation.type];
               return (
-                <button key={annotation.id} className={`annotation-card ${activeAnnotation?.id === annotation.id ? 'active' : ''}`} onClick={() => onOpenAnnotation(annotation)}>
+                <button key={annotation.id} className={`annotation-card ${activeAnnotation?.id === annotation.id ? 'active' : ''} ${annotation.target.status === 'needs-review' ? 'needs-review' : ''}`} onClick={() => onOpenAnnotation(annotation)}>
                   <span className="annotation-index">{String(index + 1).padStart(2, '0')}</span>
                   <span className="annotation-card-main">
-                    <span className="annotation-card-head"><b style={{ color: style.fontColor, background: style.backgroundColor }}>{meta.label}</b><small>{annotation.target.kind === 'character' ? '字' : annotation.target.kind === 'word' ? '词' : '句'} · {annotation.target.start + 1}–{annotation.target.end}</small></span>
+                    <span className="annotation-card-head"><b style={{ color: style.fontColor, background: style.backgroundColor }}>{meta.label}</b><small>{annotation.target.status === 'needs-review' ? '待重新定位' : `${annotation.target.kind === 'character' ? '字' : annotation.target.kind === 'word' ? '词' : '句'} · ${annotation.target.start + 1}–${annotation.target.end}`}</small></span>
                     <strong className="annotation-quote">“{annotation.target.text}”</strong>
                     <span className="annotation-content-preview">{annotation.content}</span>
                   </span>

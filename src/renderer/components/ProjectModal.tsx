@@ -56,9 +56,9 @@ export function ProjectModal({ open, project, groups, onClose, onSubmit }: Proje
 
   const submit = async () => {
     const title = form.title.trim();
-    const originalText = form.originalText.trim();
+    const originalText = project ? form.originalText : form.originalText.trim();
     if (!title) return setError('请填写篇目标题');
-    if (!originalText) return setError('请粘贴原文或选择文本文件');
+    if (!originalText.trim()) return setError('请粘贴原文或选择文本文件');
     setSaving(true);
     setError('');
     try {
@@ -101,26 +101,26 @@ export function ProjectModal({ open, project, groups, onClose, onSubmit }: Proje
             <label className="wide"><span>篇目说明</span><input value={form.description} onChange={(event) => update('description', event.target.value)} placeholder="可选：写下选篇原因或阅读目标" /></label>
           </div>
 
-          {!project && (
-            <div className="source-divider"><span>录入原文</span><i /></div>
-          )}
+          <div className="source-divider"><span>{project ? '校订原文' : '录入原文'}</span><i /></div>
 
-          <label className={`article-input ${project ? 'locked' : ''}`}>
+          <label className="article-input">
             <span className="article-input-head">
-              <span>原文内容 {!project && <b>*</b>}</span>
-              {!project && <span className="article-input-tools">
-                <button type="button" onClick={(event) => { event.preventDefault(); fileRef.current?.click(); }}><ImportIcon size={15} />选择 .txt / .md</button>
-                <button type="button" onClick={(event) => { event.preventDefault(); setForm((current) => ({ ...current, title: current.title || '桃花源记', author: current.author || '陶渊明', dynasty: current.dynasty || '东晋', originalText: SAMPLE_TEXT, tags: current.tags || '示例，古文' })); }}><SparkleIcon size={15} />填入示例</button>
-              </span>}
+              <span>原文内容 <b>*</b></span>
+              <span className="article-input-tools">
+                <button type="button" onClick={(event) => { event.preventDefault(); fileRef.current?.click(); }}><ImportIcon size={15} />{project ? '从文件替换' : '选择 .txt / .md'}</button>
+                {!project && <button type="button" onClick={(event) => { event.preventDefault(); setForm((current) => ({ ...current, title: current.title || '桃花源记', author: current.author || '陶渊明', dynasty: current.dynasty || '东晋', originalText: SAMPLE_TEXT, tags: current.tags || '示例，古文' })); }}><SparkleIcon size={15} />填入示例</button>}
+              </span>
             </span>
             <textarea
               value={form.originalText}
               onChange={(event) => update('originalText', event.target.value)}
               placeholder="在这里粘贴文言文原文，或选择本地文本文件……"
-              readOnly={Boolean(project)}
             />
-            <span className="article-input-footer"><span><FileIcon size={14} />{project ? '为确保已有批注位置准确，编辑模式下原文不可修改' : '支持纯文本与 Markdown 文本'}</span><b>{form.originalText.replace(/\s/g, '').length.toLocaleString()} 字</b></span>
+            <span className="article-input-footer"><span><FileIcon size={14} />{project ? '未受影响的批注会自动迁移；与改动相交的批注将保留并标为待定位' : '支持纯文本与 Markdown 文本'}</span><b>{form.originalText.replace(/\s/g, '').length.toLocaleString()} 字</b></span>
           </label>
+          {project && form.originalText.trim() !== project.originalText && (
+            <div className="edit-warning">原文已经修改。保存后，受影响的批注不会删除，可在批注目录中重新定位。</div>
+          )}
           <input ref={fileRef} type="file" accept=".txt,.md,.markdown,text/plain,text/markdown" hidden onChange={(event) => void chooseFile(event.target.files?.[0])} />
           {error && <div className="form-error">{error}</div>}
         </div>

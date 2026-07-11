@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { BookIcon, ExportIcon, FolderIcon, ImportIcon, MoreIcon, PlusIcon, SearchIcon, SettingsIcon, TrashIcon } from '../icons';
+import { BookIcon, ChevronIcon, ExportIcon, FolderIcon, ImportIcon, MoreIcon, PlusIcon, SearchIcon, SettingsIcon, TrashIcon } from '../icons';
 import type { Group, ProjectSummary } from '../types';
 
 type GroupFilter = 'all' | 'ungrouped' | string;
@@ -19,6 +19,8 @@ interface SidebarProps {
   onEditProject: (id: string) => void;
   onExportProject: (id: string) => void;
   onDeleteProject: (id: string) => void;
+  onHide: () => void;
+  hidden?: boolean;
 }
 
 function formatDate(iso: string) {
@@ -47,6 +49,8 @@ export function Sidebar({
   onEditProject,
   onExportProject,
   onDeleteProject,
+  onHide,
+  hidden = false,
 }: SidebarProps) {
   const [query, setQuery] = useState('');
   const [openMenu, setOpenMenu] = useState<string | null>(null);
@@ -74,13 +78,14 @@ export function Sidebar({
   }, [activeGroup, projects, query]);
 
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar ${hidden ? 'is-pane-hidden' : ''}`}>
       <header className="brand-block">
         <div className="brand-seal">墨</div>
         <div>
           <div className="brand-name">墨笺</div>
           <div className="brand-subtitle">文言文批注笔记</div>
         </div>
+        <button className="brand-collapse" onClick={onHide} title="隐藏篇目区域" aria-label="隐藏篇目区域"><ChevronIcon size={15} /></button>
       </header>
 
       <div className="sidebar-actions">
@@ -175,9 +180,8 @@ export function Sidebar({
 
       <footer className="sidebar-footer">
         <span className="storage-indicator"><i />本地资料库</span>
-        <span>v0.1 初见</span>
+        <span>v0.2 校订</span>
       </footer>
     </aside>
   );
 }
-

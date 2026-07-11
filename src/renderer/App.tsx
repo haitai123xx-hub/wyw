@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import { notesRepository } from './api';
 import { DEFAULT_STYLES, SAMPLE_TEXT } from './constants';
-import { BookIcon, ImportIcon, PlusIcon, SparkleIcon } from './icons';
+import { BookIcon, ChevronIcon, ImportIcon, PlusIcon, SparkleIcon } from './icons';
 import { DocumentView } from './components/DocumentView';
 import { Inspector } from './components/Inspector';
 import { Sidebar } from './components/Sidebar';
@@ -13,6 +13,15 @@ type Confirmation =
   | { kind: 'project'; id: string; name: string }
   | { kind: 'group'; id: string; name: string }
   | null;
+
+function readStoredNumber(key: string, fallback: number, minimum: number, maximum: number) {
+  const value = Number(localStorage.getItem(key));
+  return Number.isFinite(value) ? Math.min(maximum, Math.max(minimum, value)) : fallback;
+}
+
+function readStoredVisibility(key: string) {
+  return localStorage.getItem(key) !== 'false';
+}
 
 function ensureProject(project: Project): Project {
   return {
@@ -26,7 +35,10 @@ function ensureProject(project: Project): Project {
       tags: project.metadata.tags ?? [],
     },
     groupId: project.groupId ?? null,
-    annotations: project.annotations ?? [],
+    annotations: (project.annotations ?? []).map((annotation) => ({
+      ...annotation,
+      target: { ...annotation.target, status: annotation.target.status ?? 'valid' },
+    })),
     styles: Object.fromEntries(Object.entries(DEFAULT_STYLES).map(([type, style]) => [type, { ...style, ...(project.styles?.[type as AnnotationType] ?? {}) }])) as Project['styles'],
   };
 }
@@ -38,6 +50,7 @@ export default function App() {
   const [activeGroup, setActiveGroup] = useState<GroupFilter>('all');
   const [selection, setSelection] = useState<TextSelection | null>(null);
   const [activeAnnotationId, setActiveAnnotationId] = useState<string | null>(null);
+  const [relinkAnnotationId, setRelinkAnnotationId] = useState<string | null>(null);
   const [loadingLibrary, setLoadingLibrary] = useState(true);
   const [loadingProject, setLoadingProject] = useState(false);
   const [fatalError, setFatalError] = useState('');
@@ -47,6 +60,10 @@ export default function App() {
   const [editingGroup, setEditingGroup] = useState<Group | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const [sidebarVisible, setSidebarVisible] = useState(() => readStoredVisibility('mojian-sidebar-visible'));
+  const [inspectorVisible, setInspectorVisible] = useState(() => readStoredVisibility('mojian-inspector-visible'));
+  const [sidebarWidth, setSidebarWidth] = useState(() => readStoredNumber('mojian-sidebar-width', 278, 220, 420));
+  const [inspectorWidth, setInspectorWidth] = useState(() => readStoredNumber('mojian-inspector-width', 354, 300, 520));
 
   const toast = useCallback((message: string, tone: ToastMessage['tone'] = 'success') => {
     const id = Date.now() + Math.floor(Math.random() * 1000);
@@ -59,6 +76,42 @@ export default function App() {
     setLibrary(next);
     return next;
   }, []);
+
+  useEffect(() => {
+    localStorage.setItem('mojian-sidebar-visible', String(sidebarVisible));
+    localStorage.setItem('mojian-inspector-visible', String(inspectorVisible));
+    localStorage.setItem('mojian-sidebar-width', String(sidebarWidth));
+    localStorage.setItem('mojian-inspector-width', String(inspectorWidth));
+  }, [inspectorVisible, inspectorWidth, sidebarVisible, sidebarWidth]);
+
+  const startResize = useCallback((side: 'sidebar' | 'inspector', event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = side === 'sidebar' ? sidebarWidth : inspectorWidth;
+    document.body.classList.add('is-resizing-pane');
+
+    const onMove = (moveEvent: PointerEvent) => {
+      const delta = side === 'sidebar' ? moveEvent.clientX - startX : startX - moveEvent.clientX;
+      const otherWidth = side === 'sidebar' && inspectorVisible
+        ? inspectorWidth
+        : side === 'inspector' && sidebarVisible ? sidebarWidth : 0;
+      const maximum = Math.max(side === 'sidebar' ? 220 : 300, Math.min(side === 'sidebar' ? 420 : 520, window.innerWidth - otherWidth - 430));
+      const nextWidth = Math.round(Math.min(maximum, Math.max(side === 'sidebar' ? 220 : 300, startWidth + delta)));
+      if (side === 'sidebar') setSidebarWidth(nextWidth);
+      else setInspectorWidth(nextWidth);
+    };
+    const onEnd = () => {
+      document.body.classList.remove('is-resizing-pane');
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onEnd);
+      window.removeEventListener('pointercancel', onEnd);
+      window.removeEventListener('blur', onEnd);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onEnd, { once: true });
+    window.addEventListener('pointercancel', onEnd, { once: true });
+    window.addEventListener('blur', onEnd, { once: true });
+  }, [inspectorVisible, inspectorWidth, sidebarVisible, sidebarWidth]);
 
   useEffect(() => {
     let alive = true;
@@ -89,6 +142,7 @@ export default function App() {
     setProject(null);
     setSelection(null);
     setActiveAnnotationId(null);
+    setRelinkAnnotationId(null);
     localStorage.setItem('mojian-last-project', selectedProjectId);
     void notesRepository.getProject(selectedProjectId)
       .then((next) => { if (alive) setProject(ensureProject(next)); })
@@ -114,10 +168,18 @@ export default function App() {
 
   const updateProject = async (input: ProjectCreateInput) => {
     if (!editingProject) return;
-    const updated = await notesRepository.updateProject(editingProject.id, { metadata: input.metadata, groupId: input.groupId ?? null });
+    const updated = await notesRepository.updateProject(editingProject.id, {
+      metadata: input.metadata,
+      originalText: input.originalText,
+      groupId: input.groupId ?? null,
+    });
     await refreshLibrary();
     if (updated.id === selectedProjectId) setProject(ensureProject(updated));
-    toast('篇目设置已保存');
+    setSelection(null);
+    setActiveAnnotationId(null);
+    setRelinkAnnotationId(null);
+    const reviewCount = updated.annotations.filter((annotation) => annotation.target.status === 'needs-review').length;
+    toast(reviewCount ? `篇目已保存，${reviewCount} 条批注需要重新定位` : '篇目设置已保存', reviewCount ? 'info' : 'success');
   };
 
   const openProjectSettings = async (id: string) => {
@@ -167,6 +229,7 @@ export default function App() {
   const clearSelection = () => {
     setSelection(null);
     setActiveAnnotationId(null);
+    setRelinkAnnotationId(null);
     window.getSelection()?.removeAllRanges();
   };
 
@@ -175,8 +238,9 @@ export default function App() {
     try {
       const updated = await notesRepository.createAnnotation(project.id, input);
       applyProject(updated);
-      clearSelection();
-      toast('批注已添加');
+      setActiveAnnotationId(null);
+      setRelinkAnnotationId(null);
+      toast('批注已添加，可继续为同一段原文添加其他批注');
     } catch (reason) {
       toast(reason instanceof Error ? reason.message : '批注保存失败', 'error');
       throw reason;
@@ -189,6 +253,9 @@ export default function App() {
       const updated = await notesRepository.updateAnnotation(project.id, id, input);
       applyProject(updated);
       setActiveAnnotationId(id);
+      setRelinkAnnotationId(null);
+      setSelection(null);
+      window.getSelection()?.removeAllRanges();
       toast('批注已更新');
     } catch (reason) {
       toast(reason instanceof Error ? reason.message : '批注更新失败', 'error');
@@ -251,24 +318,35 @@ export default function App() {
     return <div className="fatal-screen"><div className="brand-seal">墨</div><h1>资料库暂时无法打开</h1><p>{fatalError}</p><button onClick={() => window.location.reload()}>重新加载</button></div>;
   }
 
+  const layoutStyle = {
+    '--sidebar-width': sidebarVisible ? `${sidebarWidth}px` : '0px',
+    '--sidebar-divider': sidebarVisible ? '6px' : '0px',
+    '--inspector-width': project && inspectorVisible ? `${inspectorWidth}px` : '0px',
+    '--inspector-divider': project && inspectorVisible ? '6px' : '0px',
+  } as CSSProperties;
+
   return (
-    <div className="app-shell">
+    <div className="app-shell" style={layoutStyle}>
       <Sidebar
-        projects={library.projects}
-        groups={library.groups}
-        selectedProjectId={selectedProjectId}
-        activeGroup={activeGroup}
-        onActiveGroupChange={setActiveGroup}
-        onSelectProject={setSelectedProjectId}
-        onNewProject={() => { setEditingProject(null); setProjectModalOpen(true); }}
-        onImportProject={() => void importProject()}
-        onNewGroup={() => { setEditingGroup(null); setGroupModalOpen(true); }}
-        onEditGroup={(group) => { setEditingGroup(group); setGroupModalOpen(true); }}
-        onDeleteGroup={(group) => setConfirmation({ kind: 'group', id: group.id, name: group.name })}
-        onEditProject={(id) => void openProjectSettings(id)}
-        onExportProject={(id) => void exportProject(id)}
-        onDeleteProject={(id) => { const summary = library.projects.find((item) => item.id === id); setConfirmation({ kind: 'project', id, name: summary?.metadata.title ?? '该篇目' }); }}
-      />
+          projects={library.projects}
+          groups={library.groups}
+          selectedProjectId={selectedProjectId}
+          activeGroup={activeGroup}
+          onActiveGroupChange={setActiveGroup}
+          onSelectProject={setSelectedProjectId}
+          onNewProject={() => { setEditingProject(null); setProjectModalOpen(true); }}
+          onImportProject={() => void importProject()}
+          onNewGroup={() => { setEditingGroup(null); setGroupModalOpen(true); }}
+          onEditGroup={(group) => { setEditingGroup(group); setGroupModalOpen(true); }}
+          onDeleteGroup={(group) => setConfirmation({ kind: 'group', id: group.id, name: group.name })}
+          onEditProject={(id) => void openProjectSettings(id)}
+          onExportProject={(id) => void exportProject(id)}
+          onDeleteProject={(id) => { const summary = library.projects.find((item) => item.id === id); setConfirmation({ kind: 'project', id, name: summary?.metadata.title ?? '该篇目' }); }}
+          onHide={() => setSidebarVisible(false)}
+          hidden={!sidebarVisible}
+        />
+      {sidebarVisible && <div className="pane-resizer sidebar-resizer" onPointerDown={(event) => startResize('sidebar', event)} onDoubleClick={() => setSidebarWidth(278)} title="拖动调整篇目区域宽度；双击恢复默认" />}
+      {!sidebarVisible && <button className="pane-reveal pane-reveal-left" onClick={() => setSidebarVisible(true)} title="显示篇目区域"><ChevronIcon size={17} /></button>}
 
       {loadingLibrary || loadingProject ? (
         <div className="workspace-loading"><div className="loading-paper"><i /><i /><i /><i /></div><span>展卷中……</span></div>
@@ -278,22 +356,28 @@ export default function App() {
             project={project}
             selection={selection}
             activeAnnotationId={activeAnnotationId}
-            onSelectText={(next) => { setSelection(next); setActiveAnnotationId(null); }}
-            onAnnotationClick={(annotation) => { setActiveAnnotationId(annotation.id); setSelection(null); window.getSelection()?.removeAllRanges(); }}
+            onSelectText={(next) => { setSelection(next); if (!relinkAnnotationId) setActiveAnnotationId(null); }}
+            onAnnotationClick={(annotation) => { setActiveAnnotationId(annotation.id); setRelinkAnnotationId(null); setSelection(null); window.getSelection()?.removeAllRanges(); }}
             onEditProject={() => void openProjectSettings(project.id)}
             onExportProject={() => void exportProject(project.id)}
           />
+          {inspectorVisible && <div className="pane-resizer inspector-resizer" onPointerDown={(event) => startResize('inspector', event)} onDoubleClick={() => setInspectorWidth(354)} title="拖动调整批注区域宽度；双击恢复默认" />}
           <Inspector
             project={project}
             selection={selection}
             activeAnnotation={activeAnnotation}
             onClearSelection={clearSelection}
-            onOpenAnnotation={(annotation) => { setActiveAnnotationId(annotation.id); setSelection(null); }}
+            onOpenAnnotation={(annotation) => { setActiveAnnotationId(annotation.id); setRelinkAnnotationId(null); setSelection(null); }}
             onCreateAnnotation={createAnnotation}
             onUpdateAnnotation={updateAnnotation}
             onDeleteAnnotation={deleteAnnotation}
             onUpdateStyle={updateStyle}
+            isRelinking={relinkAnnotationId !== null}
+            onStartRelink={(id) => { setActiveAnnotationId(id); setRelinkAnnotationId(id); setSelection(null); toast('请在正文中选择这条批注的新位置', 'info'); }}
+            onHide={() => setInspectorVisible(false)}
+            hidden={!inspectorVisible}
           />
+          {!inspectorVisible && <button className="pane-reveal pane-reveal-right" onClick={() => setInspectorVisible(true)} title="显示批注区域"><ChevronIcon size={17} /></button>}
         </>
       ) : (
         <WelcomePane onNew={() => { setEditingProject(null); setProjectModalOpen(true); }} onImport={() => void importProject()} onSample={() => void createSample()} />

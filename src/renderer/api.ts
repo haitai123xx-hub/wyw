@@ -1,5 +1,7 @@
 import { DEFAULT_STYLES } from './constants';
 import type { NotesApi } from '@shared/api';
+import { isAnnotationTypeAllowed } from '@shared/annotation-rules';
+import { migrateAnnotationsForTextChange } from '@shared/text-migration';
 import type {
   Annotation,
   AnnotationStyle,
@@ -111,7 +113,15 @@ export const notesRepository = {
       const store = readPreviewStore();
       const project = requireProject(store, id);
       if (patch.metadata) project.metadata = { ...project.metadata, ...patch.metadata };
-      if (patch.originalText !== undefined) project.originalText = patch.originalText;
+      if (patch.originalText !== undefined) {
+        project.annotations = migrateAnnotationsForTextChange(
+          project.annotations,
+          project.originalText,
+          patch.originalText,
+          now(),
+        ).annotations;
+        project.originalText = patch.originalText;
+      }
       if ('groupId' in patch) project.groupId = patch.groupId ?? null;
       project.updatedAt = now();
       writePreviewStore(store);
@@ -165,8 +175,9 @@ export const notesRepository = {
     }, () => {
       const store = readPreviewStore();
       const project = requireProject(store, projectId);
+      if (!isAnnotationTypeAllowed(input.target.kind, input.type)) throw new Error('所选批注类型不适用于当前粒度');
       const timestamp = now();
-      project.annotations.push({ id: uuid(), ...input, createdAt: timestamp, updatedAt: timestamp });
+      project.annotations.push({ id: uuid(), ...input, target: { ...input.target, status: 'valid' }, createdAt: timestamp, updatedAt: timestamp });
       project.updatedAt = timestamp;
       writePreviewStore(store);
       return structuredClone(project);
@@ -182,6 +193,9 @@ export const notesRepository = {
       const project = requireProject(store, projectId);
       const annotation = project.annotations.find((item) => item.id === annotationId);
       if (!annotation) throw new Error('批注不存在');
+      const nextKind = patch.target?.kind ?? annotation.target.kind;
+      const nextType = patch.type ?? annotation.type;
+      if (!isAnnotationTypeAllowed(nextKind, nextType)) throw new Error('所选批注类型不适用于当前粒度');
       Object.assign(annotation, patch, { updatedAt: now() });
       project.updatedAt = now();
       writePreviewStore(store);

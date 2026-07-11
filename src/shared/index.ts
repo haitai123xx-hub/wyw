@@ -1,3 +1,5 @@
 export * from './api'
 export * from './models'
 export * from './transport'
+export * from './text-migration'
+export * from './annotation-rules'

@@ -22,6 +22,8 @@ interface Segment {
 
 function makeSegments(project: Project): Segment[] {
   const valid = project.annotations.filter((annotation) => (
+    annotation.target.status !== 'needs-review'
+    &&
     annotation.target.start >= 0
     && annotation.target.end > annotation.target.start
     && annotation.target.end <= project.originalText.length
@@ -183,4 +185,3 @@ export function DocumentView({ project, activeAnnotationId, selection, onSelectT
     </main>
   );
 }
-

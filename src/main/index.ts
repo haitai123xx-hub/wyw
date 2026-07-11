@@ -1,6 +1,6 @@
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { app, BrowserWindow, shell } from 'electron'
+import { app, BrowserWindow, Menu, shell } from 'electron'
 import { registerIpcHandlers, unregisterIpcHandlers } from './ipc'
 import { JsonRepository } from './storage'
 
@@ -23,6 +23,7 @@ function createMainWindow(): BrowserWindow {
     minWidth: 1080,
     minHeight: 700,
     show: false,
+    autoHideMenuBar: true,
     backgroundColor: '#F6F3EA',
     title: '墨笺 · 文言文批注笔记',
     webPreferences: {
@@ -33,6 +34,8 @@ function createMainWindow(): BrowserWindow {
       webSecurity: true,
     },
   })
+
+  window.setMenuBarVisibility(false)
 
   window.once('ready-to-show', () => window.show())
   window.on('closed', () => {
@@ -57,6 +60,7 @@ function createMainWindow(): BrowserWindow {
 }
 
 async function startApplication(): Promise<void> {
+  Menu.setApplicationMenu(null)
   const repository = new JsonRepository(path.join(app.getPath('userData'), 'data'))
   await repository.initialize()
   registerIpcHandlers(repository)
