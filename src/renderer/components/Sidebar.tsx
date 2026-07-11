@@ -180,7 +180,7 @@ export function Sidebar({
 
       <footer className="sidebar-footer">
         <span className="storage-indicator"><i />本地资料库</span>
-        <span>v0.2 校订</span>
+        <span>Beta 0.1.1</span>
       </footer>
     </aside>
   );
