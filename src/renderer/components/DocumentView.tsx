@@ -1,6 +1,6 @@
-import { useMemo, useRef } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { ANNOTATION_TYPES, annotationTypeMeta } from '../constants';
-import { EditIcon, ExportIcon, InfoIcon, NoteIcon } from '../icons';
+import { CloseIcon, EditIcon, ExportIcon, InfoIcon, NoteIcon } from '../icons';
 import type { Annotation, AnnotationStyle, Project, TextSelection } from '../types';
 
 interface DocumentViewProps {
@@ -64,6 +64,7 @@ function segmentStyle(annotation: Annotation | undefined, styles: Project['style
 
 export function DocumentView({ project, activeAnnotationId, selection, onSelectText, onAnnotationClick, onEditProject, onExportProject }: DocumentViewProps) {
   const textRef = useRef<HTMLDivElement>(null);
+  const [legendVisible, setLegendVisible] = useState(true);
   const segments = useMemo(() => makeSegments(project), [project]);
   const counts = useMemo(() => {
     const result = Object.fromEntries(ANNOTATION_TYPES.map((type) => [type.id, 0])) as Record<string, number>;
@@ -112,25 +113,24 @@ export function DocumentView({ project, activeAnnotationId, selection, onSelectT
         </div>
       </header>
 
+      {selection && (
+        <div className="selection-dock">
+          <span><i />已选择 <strong>{selection.text.length}</strong> 个字符</span>
+          <span className="selection-preview">“{selection.text.length > 28 ? `${selection.text.slice(0, 28)}…` : selection.text}”</span>
+        </div>
+      )}
+
       <div className="document-scroll">
-        <div className="paper-wrap">
-          {selection && (
-            <div className="selection-notice">
-              <span><i />已选择 <strong>{selection.text.length}</strong> 个字符</span>
-              <span className="selection-preview">“{selection.text.length > 18 ? `${selection.text.slice(0, 18)}…` : selection.text}”</span>
-              <span>请在右侧添加批注</span>
-            </div>
-          )}
-          <article className="paper">
-            <div className="paper-topmark"><span>原文</span><i /></div>
+        <div className="reading-column">
+          <article className="article-content">
             <header className="article-heading">
-              <div className="article-kicker">{project.metadata.source || '古文研读'}</div>
+              {project.metadata.source && <div className="article-kicker">{project.metadata.source}</div>}
               <h1>{project.metadata.title}</h1>
               {authorLine && <p className="article-author">〔{authorLine}〕</p>}
               {project.metadata.tags?.length ? (
                 <div className="article-tags">{project.metadata.tags.map((tag) => <span key={tag}>#{tag}</span>)}</div>
               ) : null}
-              <div className="heading-rule"><i /><span>◆</span><i /></div>
+              <div className="heading-rule"><i /><i /></div>
             </header>
 
             <div
@@ -162,26 +162,30 @@ export function DocumentView({ project, activeAnnotationId, selection, onSelectT
               <aside className="article-description"><InfoIcon size={16} /><p>{project.metadata.description}</p></aside>
             )}
 
-            <footer className="paper-footer">
+            <footer className="article-footer">
               <span>全文 {project.originalText.replace(/\s/g, '').length} 字</span>
               <span className="footer-seal">笺</span>
               <span>{project.annotations.length} 条批注</span>
             </footer>
           </article>
-
-          <section className="annotation-legend">
-            <div className="legend-title"><NoteIcon size={16} /><span>批注图例</span><small>选择原文中的字、词或句即可添加批注</small></div>
-            <div className="legend-items">
-              {ANNOTATION_TYPES.map((type) => (
-                <span key={type.id} className={counts[type.id] ? 'has-notes' : ''}>
-                  <i style={{ background: project.styles[type.id]?.backgroundColor, borderColor: project.styles[type.id]?.fontColor }} />
-                  {type.label}<b>{counts[type.id] || ''}</b>
-                </span>
-              ))}
-            </div>
-          </section>
         </div>
       </div>
+
+      {legendVisible ? (
+        <section className="annotation-legend">
+          <div className="legend-title"><NoteIcon size={15} /><span>批注图例</span><button onClick={() => setLegendVisible(false)} title="隐藏图例"><CloseIcon size={14} /></button></div>
+          <div className="legend-items">
+            {ANNOTATION_TYPES.map((type) => (
+              <span key={type.id} className={counts[type.id] ? 'has-notes' : ''}>
+                <i style={{ background: project.styles[type.id]?.backgroundColor, borderColor: project.styles[type.id]?.fontColor }} />
+                {type.label}<b>{counts[type.id] || ''}</b>
+              </span>
+            ))}
+          </div>
+        </section>
+      ) : (
+        <button className="legend-toggle" onClick={() => setLegendVisible(true)}><NoteIcon size={15} />图例</button>
+      )}
     </main>
   );
 }

@@ -326,7 +326,7 @@ export default function App() {
   } as CSSProperties;
 
   return (
-    <div className="app-shell" style={layoutStyle}>
+    <div className={`app-shell ${sidebarVisible ? '' : 'sidebar-hidden'} ${project && !inspectorVisible ? 'inspector-hidden' : ''}`} style={layoutStyle}>
       <Sidebar
           projects={library.projects}
           groups={library.groups}
@@ -346,7 +346,7 @@ export default function App() {
           hidden={!sidebarVisible}
         />
       {sidebarVisible && <div className="pane-resizer sidebar-resizer" onPointerDown={(event) => startResize('sidebar', event)} onDoubleClick={() => setSidebarWidth(278)} title="拖动调整篇目区域宽度；双击恢复默认" />}
-      {!sidebarVisible && <button className="pane-reveal pane-reveal-left" onClick={() => setSidebarVisible(true)} title="显示篇目区域"><ChevronIcon size={17} /></button>}
+      {!sidebarVisible && <button className="pane-reveal pane-reveal-left" onClick={() => setSidebarVisible(true)} title="显示篇目区域" aria-label="显示篇目区域"><ChevronIcon size={17} /></button>}
 
       {loadingLibrary || loadingProject ? (
         <div className="workspace-loading"><div className="loading-paper"><i /><i /><i /><i /></div><span>展卷中……</span></div>
@@ -377,7 +377,7 @@ export default function App() {
             onHide={() => setInspectorVisible(false)}
             hidden={!inspectorVisible}
           />
-          {!inspectorVisible && <button className="pane-reveal pane-reveal-right" onClick={() => setInspectorVisible(true)} title="显示批注区域"><ChevronIcon size={17} /></button>}
+          {!inspectorVisible && <button className="pane-reveal pane-reveal-right" onClick={() => setInspectorVisible(true)} title="显示批注区域" aria-label="显示批注区域"><ChevronIcon size={17} /></button>}
         </>
       ) : (
         <WelcomePane onNew={() => { setEditingProject(null); setProjectModalOpen(true); }} onImport={() => void importProject()} onSample={() => void createSample()} />

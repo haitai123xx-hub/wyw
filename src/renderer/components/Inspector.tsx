@@ -1,10 +1,22 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ALLOWED_ANNOTATION_TYPES, isAnnotationTypeAllowed } from '@shared/annotation-rules';
 import { ANNOTATION_TYPES, TARGET_KINDS, annotationTypeMeta } from '../constants';
-import { CheckIcon, ChevronIcon, CloseIcon, ListIcon, NoteIcon, SearchIcon, SparkleIcon, StyleIcon, TrashIcon } from '../icons';
+import { CheckIcon, ChevronIcon, CloseIcon, ListIcon, NoteIcon, PlusIcon, SearchIcon, SparkleIcon, StyleIcon, TrashIcon } from '../icons';
 import type { Annotation, AnnotationStyle, AnnotationType, Project, TargetKind, TextSelection } from '../types';
 
 type InspectorTab = 'editor' | 'list' | 'style';
+
+const FONT_COLOR_PRESETS = ['#292723', '#7F3C32', '#1D4ED8', '#6D28D9', '#047857', '#B45309', '#0E7490', '#9D174D'];
+const BACKGROUND_COLOR_PRESETS: AnnotationStyle['backgroundColor'][] = ['transparent', '#FFF7ED', '#FEF3C7', '#D1FAE5', '#DBEAFE', '#EDE9FE', '#FFE4E6', '#FCE7F3'];
+
+function readCustomPalette(key: string): string[] {
+  try {
+    const value = JSON.parse(localStorage.getItem(key) ?? '[]');
+    return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && /^#[\dA-F]{6}$/i.test(item)) : [];
+  } catch {
+    return [];
+  }
+}
 
 interface AnnotationInput {
   type: AnnotationType;
@@ -66,6 +78,8 @@ export function Inspector({
   const [styleDraft, setStyleDraft] = useState<AnnotationStyle>(project.styles.definition);
   const [styleSaving, setStyleSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
+  const [customFontColors, setCustomFontColors] = useState(() => readCustomPalette('mojian-font-palette'));
+  const [customBackgroundColors, setCustomBackgroundColors] = useState(() => readCustomPalette('mojian-background-palette'));
 
   useEffect(() => {
     if (activeAnnotation) {
@@ -88,6 +102,11 @@ export function Inspector({
   }, [project.id, project.styles, styleType]);
 
   useEffect(() => {
+    localStorage.setItem('mojian-font-palette', JSON.stringify(customFontColors));
+    localStorage.setItem('mojian-background-palette', JSON.stringify(customBackgroundColors));
+  }, [customBackgroundColors, customFontColors]);
+
+  useEffect(() => {
     if (!isAnnotationTypeAllowed(kind, type)) setType('definition');
   }, [kind, type]);
 
@@ -101,6 +120,19 @@ export function Inspector({
     ? { ...selection, kind, status: 'valid' as const }
     : activeAnnotation?.target ?? (selection ? { ...selection, kind, status: 'valid' as const } : null);
   const allowedTypes = ALLOWED_ANNOTATION_TYPES[kind];
+  const fontColorOptions = [...new Set([...FONT_COLOR_PRESETS, ...customFontColors, styleDraft.fontColor])];
+  const backgroundColorOptions = [...new Set([...BACKGROUND_COLOR_PRESETS, ...customBackgroundColors, styleDraft.backgroundColor])];
+
+  const addCustomColor = (target: 'font' | 'background', color: string) => {
+    const normalized = color.toUpperCase();
+    if (target === 'font') {
+      setCustomFontColors((colors) => colors.includes(normalized) ? colors : [...colors, normalized]);
+      setStyleDraft((style) => ({ ...style, fontColor: normalized }));
+    } else {
+      setCustomBackgroundColors((colors) => colors.includes(normalized) ? colors : [...colors, normalized]);
+      setStyleDraft((style) => ({ ...style, backgroundColor: normalized }));
+    }
+  };
   const filteredAnnotations = useMemo(() => {
     const keyword = listQuery.trim().toLocaleLowerCase();
     return [...project.annotations]
@@ -315,9 +347,19 @@ export function Inspector({
           </div>
 
           <div className="style-form">
-            <div className="color-fields">
-              <label><span>字体颜色</span><span className="color-input"><input type="color" value={styleDraft.fontColor} onChange={(event) => setStyleDraft({ ...styleDraft, fontColor: event.target.value })} /><b>{styleDraft.fontColor.toUpperCase()}</b></span></label>
-              <label><span>背景颜色</span><span className="color-input"><input type="color" value={styleDraft.backgroundColor} onChange={(event) => setStyleDraft({ ...styleDraft, backgroundColor: event.target.value })} /><b>{styleDraft.backgroundColor.toUpperCase()}</b></span></label>
+            <div className="palette-field">
+              <span>字体颜色</span>
+              <div className="color-swatches">
+                {fontColorOptions.map((color) => <button key={color} className={styleDraft.fontColor.toUpperCase() === color.toUpperCase() ? 'active' : ''} style={{ background: color }} onClick={() => setStyleDraft({ ...styleDraft, fontColor: color })} title={color} aria-label={`字体颜色 ${color}`} />)}
+                <label className="color-add" title="添加字体颜色"><PlusIcon size={14} /><input type="color" defaultValue="#7F3C32" onChange={(event) => addCustomColor('font', event.target.value)} /></label>
+              </div>
+            </div>
+            <div className="palette-field">
+              <span>背景颜色</span>
+              <div className="color-swatches">
+                {backgroundColorOptions.map((color) => <button key={color} className={`${styleDraft.backgroundColor.toUpperCase() === color.toUpperCase() ? 'active' : ''} ${color === 'transparent' ? 'transparent-swatch' : ''}`} style={{ background: color === 'transparent' ? undefined : color }} onClick={() => setStyleDraft({ ...styleDraft, backgroundColor: color })} title={color === 'transparent' ? '无背景' : color} aria-label={color === 'transparent' ? '无背景颜色' : `背景颜色 ${color}`} />)}
+                <label className="color-add" title="添加背景颜色"><PlusIcon size={14} /><input type="color" defaultValue="#FFF7ED" onChange={(event) => addCustomColor('background', event.target.value)} /></label>
+              </div>
             </div>
             <label className="select-field"><span>字体</span><select value={styleDraft.fontFamily} onChange={(event) => setStyleDraft({ ...styleDraft, fontFamily: event.target.value })}><option value="serif">系统宋体</option><option value="KaiTi, STKaiti, serif">楷体</option><option value="FangSong, STFangsong, serif">仿宋</option><option value="Microsoft YaHei, sans-serif">微软雅黑</option></select></label>
             <label className="range-field"><span>字号 <b>{styleDraft.fontSize}px</b></span><input type="range" min="15" max="26" step="1" value={styleDraft.fontSize} onChange={(event) => setStyleDraft({ ...styleDraft, fontSize: Number(event.target.value) })} /></label>
