@@ -15,7 +15,7 @@ import type {
 
 type NotesBridge = NotesApi;
 
-const STORAGE_KEY = 'mojian-browser-preview-v1';
+const STORAGE_KEY = 'mojian-browser-preview-v3';
 
 function getBridge(): NotesBridge | null {
   return ((window as unknown as { notesApi?: NotesBridge }).notesApi ?? null);
@@ -79,7 +79,7 @@ export const notesRepository = {
       () => {
         const store = readPreviewStore();
         const timestamp = now();
-        return { schemaVersion: 1, projects: store.projects.map(summaryOf), groups: store.groups, defaultStyles: structuredClone(DEFAULT_STYLES), createdAt: timestamp, updatedAt: timestamp };
+        return { schemaVersion: 2, projects: store.projects.map(summaryOf), groups: store.groups, defaultStyles: structuredClone(DEFAULT_STYLES), createdAt: timestamp, updatedAt: timestamp };
       },
     );
   },
@@ -93,7 +93,7 @@ export const notesRepository = {
       const store = readPreviewStore();
       const timestamp = now();
       const project: Project = {
-        schemaVersion: 1,
+        schemaVersion: 2,
         id: uuid(),
         ...input,
         groupId: input.groupId ?? null,
@@ -168,7 +168,7 @@ export const notesRepository = {
     });
   },
 
-  async createAnnotation(projectId: string, input: Pick<Annotation, 'type' | 'target' | 'content'>): Promise<Project> {
+  async createAnnotation(projectId: string, input: Pick<Annotation, 'type' | 'target' | 'detail' | 'note'>): Promise<Project> {
     return bridgeOrPreview(async (bridge) => {
       await bridge.createAnnotation(projectId, input);
       return bridge.getProject(projectId);
@@ -184,7 +184,7 @@ export const notesRepository = {
     });
   },
 
-  async updateAnnotation(projectId: string, annotationId: string, patch: Partial<Pick<Annotation, 'type' | 'target' | 'content'>>): Promise<Project> {
+  async updateAnnotation(projectId: string, annotationId: string, patch: Partial<Pick<Annotation, 'type' | 'target' | 'detail' | 'note'>>): Promise<Project> {
     return bridgeOrPreview(async (bridge) => {
       await bridge.updateAnnotation(projectId, annotationId, patch);
       return bridge.getProject(projectId);
@@ -248,7 +248,7 @@ export const notesRepository = {
       const group = store.groups.find((item) => item.id === project.groupId) ?? null;
       const sharePackage = {
         format: 'wenyan-notes-project',
-        formatVersion: 1,
+        formatVersion: 2,
         appVersion: 'browser-preview',
         exportedAt: now(),
         project,

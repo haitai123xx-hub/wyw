@@ -14,6 +14,7 @@ export const ANNOTATION_TYPES: Array<{
   { id: 'phonetic-loan', label: '通假字', shortLabel: '通', description: '借用同音或近音字', color: '#a14f35' },
   { id: 'function-word', label: '文言虚词', shortLabel: '虚', description: '虚词的意义与用法', color: '#356c8a' },
   { id: 'special-sentence', label: '特殊句式', shortLabel: '句', description: '判断、倒装、省略等句式', color: '#6a7240' },
+  { id: 'pronunciation', label: '注音', shortLabel: '音', description: '为单字标注拼音和声调', color: '#7c3aed' },
 ];
 
 export const TARGET_KINDS: Array<{ id: TargetKind; label: string; hint: string }> = [
@@ -22,14 +23,17 @@ export const TARGET_KINDS: Array<{ id: TargetKind; label: string; hint: string }
   { id: 'sentence', label: '句', hint: '句子' },
 ];
 
+const DISPLAY_DEFAULTS = { mark: 'combined' as const, backgroundOpacity: 18, visible: true, priority: 10, notePosition: 'below' as const, noteFontSize: 9 };
+
 export const DEFAULT_STYLES: Record<AnnotationType, AnnotationStyle> = {
-  definition: { fontColor: '#245f50', backgroundColor: '#e3f0e9', bold: false, underline: true, italic: false, fontFamily: 'serif', fontSize: 18 },
-  polysemy: { fontColor: '#7d511f', backgroundColor: '#f4ead7', bold: false, underline: true, italic: false, fontFamily: 'serif', fontSize: 18 },
-  'ancient-modern': { fontColor: '#7b3c48', backgroundColor: '#f3e1e4', bold: false, underline: true, italic: false, fontFamily: 'serif', fontSize: 18 },
-  'word-class': { fontColor: '#514b82', backgroundColor: '#e8e5f3', bold: false, underline: true, italic: false, fontFamily: 'serif', fontSize: 18 },
-  'phonetic-loan': { fontColor: '#93442d', backgroundColor: '#f5e1da', bold: true, underline: true, italic: false, fontFamily: 'serif', fontSize: 18 },
-  'function-word': { fontColor: '#2d6680', backgroundColor: '#deedf3', bold: false, underline: true, italic: false, fontFamily: 'serif', fontSize: 18 },
-  'special-sentence': { fontColor: '#5f6835', backgroundColor: '#ebefd8', bold: false, underline: true, italic: false, fontFamily: 'serif', fontSize: 18 },
+  definition: { ...DISPLAY_DEFAULTS, priority: 10, fontColor: '#245f50', backgroundColor: '#e3f0e9', bold: false, underline: true, italic: false, fontFamily: 'serif', fontSize: 18 },
+  polysemy: { ...DISPLAY_DEFAULTS, priority: 30, notePosition: 'above', fontColor: '#7d511f', backgroundColor: '#f4ead7', bold: false, underline: true, italic: false, fontFamily: 'serif', fontSize: 18 },
+  'ancient-modern': { ...DISPLAY_DEFAULTS, mark: 'dashed', priority: 60, fontColor: '#7b3c48', backgroundColor: '#f3e1e4', bold: false, underline: true, italic: false, fontFamily: 'serif', fontSize: 18 },
+  'word-class': { ...DISPLAY_DEFAULTS, priority: 50, notePosition: 'above', fontColor: '#514b82', backgroundColor: '#e8e5f3', bold: false, underline: true, italic: false, fontFamily: 'serif', fontSize: 18 },
+  'phonetic-loan': { ...DISPLAY_DEFAULTS, mark: 'dot', priority: 70, notePosition: 'above', fontColor: '#93442d', backgroundColor: '#f5e1da', bold: true, underline: true, italic: false, fontFamily: 'serif', fontSize: 18 },
+  'function-word': { ...DISPLAY_DEFAULTS, mark: 'dot', priority: 40, fontColor: '#2d6680', backgroundColor: '#deedf3', bold: false, underline: true, italic: false, fontFamily: 'serif', fontSize: 18 },
+  'special-sentence': { ...DISPLAY_DEFAULTS, mark: 'background', priority: 20, backgroundOpacity: 10, fontColor: '#5f6835', backgroundColor: '#ebefd8', bold: false, underline: true, italic: false, fontFamily: 'serif', fontSize: 18 },
+  pronunciation: { fontColor: '#7c3aed', backgroundColor: 'transparent', bold: false, underline: false, italic: false, fontFamily: 'serif', fontSize: 18, mark: 'dot', backgroundOpacity: 0, visible: true, priority: 80, notePosition: 'above', noteFontSize: 8 },
 };
 
 export const GROUP_COLORS = ['#9f5545', '#356b5f', '#4e628d', '#8a6a35', '#725786', '#587382'];

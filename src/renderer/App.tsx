@@ -44,7 +44,7 @@ function ensureProject(project: Project): Project {
 }
 
 export default function App() {
-  const [library, setLibrary] = useState<Library>({ schemaVersion: 1, projects: [], groups: [], defaultStyles: DEFAULT_STYLES, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+  const [library, setLibrary] = useState<Library>({ schemaVersion: 2, projects: [], groups: [], defaultStyles: DEFAULT_STYLES, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [project, setProject] = useState<Project | null>(null);
   const [activeGroup, setActiveGroup] = useState<GroupFilter>('all');
@@ -216,11 +216,35 @@ export default function App() {
 
   const createSample = async () => {
     try {
-      await createProject({
+      const created = await notesRepository.createProject({
         metadata: { title: '桃花源记', author: '陶渊明', dynasty: '东晋', source: '示例篇目', description: '这是一篇内置示例。拖动选择原文，即可开始添加批注。', tags: ['示例', '古文'] },
         originalText: SAMPLE_TEXT,
         groupId: null,
       });
+      await refreshLibrary();
+      setSelectedProjectId(created.id);
+      setProject(ensureProject(created));
+      let demonstrated = await notesRepository.createAnnotation(created.id, {
+        type: 'pronunciation', target: { kind: 'character', start: 0, end: 1, text: '晋', status: 'valid' },
+        detail: { kind: 'pronunciation', pinyin: 'jìn' }, note: '',
+      });
+      demonstrated = await notesRepository.createAnnotation(created.id, {
+        type: 'definition', target: { kind: 'word', start: 1, end: 3, text: '太元', status: 'valid' },
+        detail: { kind: 'definition', meaning: '东晋孝武帝年号' }, note: '',
+      });
+      const functionWordStart = SAMPLE_TEXT.indexOf('之');
+      demonstrated = await notesRepository.createAnnotation(created.id, {
+        type: 'function-word', target: { kind: 'character', start: functionWordStart, end: functionWordStart + 1, text: '之', status: 'valid' },
+        detail: { kind: 'function-word', character: '之', usageCode: 'possessive', partOfSpeech: '助词', usage: '结构助词', translation: '的' }, note: '',
+      });
+      const ancientModernStart = SAMPLE_TEXT.indexOf('交通');
+      demonstrated = await notesRepository.createAnnotation(created.id, {
+        type: 'ancient-modern', target: { kind: 'word', start: ancientModernStart, end: ancientModernStart + 2, text: '交通', status: 'valid' },
+        detail: { kind: 'ancient-modern', ancientMeaning: '交错相通', modernMeaning: '运输事业' }, note: '',
+      });
+      setProject(ensureProject(demonstrated));
+      await refreshLibrary();
+      toast('已创建带有行间批注的《桃花源记》示例');
     } catch (reason) {
       toast(reason instanceof Error ? reason.message : '示例创建失败', 'error');
     }
@@ -233,7 +257,7 @@ export default function App() {
     window.getSelection()?.removeAllRanges();
   };
 
-  const createAnnotation = async (input: Pick<Annotation, 'type' | 'target' | 'content'>) => {
+  const createAnnotation = async (input: Pick<Annotation, 'type' | 'target' | 'detail' | 'note'>) => {
     if (!project) return;
     try {
       const updated = await notesRepository.createAnnotation(project.id, input);
@@ -247,7 +271,7 @@ export default function App() {
     }
   };
 
-  const updateAnnotation = async (id: string, input: Pick<Annotation, 'type' | 'target' | 'content'>) => {
+  const updateAnnotation = async (id: string, input: Pick<Annotation, 'type' | 'target' | 'detail' | 'note'>) => {
     if (!project) return;
     try {
       const updated = await notesRepository.updateAnnotation(project.id, id, input);

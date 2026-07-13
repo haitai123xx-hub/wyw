@@ -1,8 +1,8 @@
 import { z } from 'zod'
 import { isAnnotationTypeAllowed } from './annotation-rules'
 
-export const DATA_SCHEMA_VERSION = 1 as const
-export const SHARE_FORMAT_VERSION = 1 as const
+export const DATA_SCHEMA_VERSION = 2 as const
+export const SHARE_FORMAT_VERSION = 2 as const
 export const SHARE_FORMAT = 'wenyan-notes-project' as const
 
 export const ANNOTATION_TYPES = [
@@ -13,6 +13,7 @@ export const ANNOTATION_TYPES = [
   'phonetic-loan',
   'function-word',
   'special-sentence',
+  'pronunciation',
 ] as const
 
 export const AnnotationTypeSchema = z.enum(ANNOTATION_TYPES)
@@ -26,6 +27,7 @@ export const ANNOTATION_TYPE_LABELS: Record<AnnotationType, string> = {
   'phonetic-loan': '通假字',
   'function-word': '文言虚词',
   'special-sentence': '特殊句式',
+  pronunciation: '注音',
 }
 
 export const TARGET_KINDS = ['character', 'word', 'sentence'] as const
@@ -52,6 +54,12 @@ export const AnnotationStyleSchema = z
     bold: z.boolean(),
     underline: z.boolean(),
     italic: z.boolean(),
+    mark: z.enum(['color', 'background', 'underline', 'dashed', 'wavy', 'dot', 'combined']),
+    backgroundOpacity: z.number().int().min(0).max(100),
+    visible: z.boolean(),
+    priority: z.number().int().min(1).max(99),
+    notePosition: z.enum(['above', 'below', 'hidden']).default('below'),
+    noteFontSize: z.number().int().min(7).max(18).default(9),
   })
   .strict()
 
@@ -66,6 +74,7 @@ export const AnnotationStylesSchema = z
     'phonetic-loan': AnnotationStyleSchema,
     'function-word': AnnotationStyleSchema,
     'special-sentence': AnnotationStyleSchema,
+    pronunciation: AnnotationStyleSchema,
   })
   .strict()
 
@@ -77,16 +86,23 @@ const baseStyle: Omit<AnnotationStyle, 'fontColor' | 'backgroundColor'> = {
   bold: false,
   underline: false,
   italic: false,
+  mark: 'combined',
+  backgroundOpacity: 18,
+  visible: true,
+  priority: 10,
+  notePosition: 'below',
+  noteFontSize: 9,
 }
 
 export const DEFAULT_ANNOTATION_STYLES: AnnotationStyles = {
-  definition: { ...baseStyle, fontColor: '#1D4ED8', backgroundColor: '#DBEAFE' },
-  polysemy: { ...baseStyle, fontColor: '#6D28D9', backgroundColor: '#EDE9FE' },
-  'ancient-modern': { ...baseStyle, fontColor: '#BE123C', backgroundColor: '#FFE4E6' },
-  'word-class': { ...baseStyle, fontColor: '#047857', backgroundColor: '#D1FAE5' },
-  'phonetic-loan': { ...baseStyle, fontColor: '#B45309', backgroundColor: '#FEF3C7' },
-  'function-word': { ...baseStyle, fontColor: '#0E7490', backgroundColor: '#CFFAFE' },
-  'special-sentence': { ...baseStyle, fontColor: '#9D174D', backgroundColor: '#FCE7F3' },
+  definition: { ...baseStyle, priority: 10, fontColor: '#1D4ED8', backgroundColor: '#DBEAFE' },
+  polysemy: { ...baseStyle, priority: 30, notePosition: 'above', fontColor: '#6D28D9', backgroundColor: '#EDE9FE' },
+  'ancient-modern': { ...baseStyle, mark: 'dashed', priority: 60, fontColor: '#BE123C', backgroundColor: '#FFE4E6' },
+  'word-class': { ...baseStyle, priority: 50, notePosition: 'above', fontColor: '#047857', backgroundColor: '#D1FAE5' },
+  'phonetic-loan': { ...baseStyle, mark: 'dot', priority: 70, notePosition: 'above', fontColor: '#B45309', backgroundColor: '#FEF3C7' },
+  'function-word': { ...baseStyle, mark: 'dot', priority: 40, fontColor: '#0E7490', backgroundColor: '#CFFAFE' },
+  'special-sentence': { ...baseStyle, mark: 'background', backgroundOpacity: 10, priority: 20, fontColor: '#9D174D', backgroundColor: '#FCE7F3' },
+  pronunciation: { ...baseStyle, fontColor: '#7C3AED', backgroundColor: 'transparent', mark: 'dot', priority: 80, notePosition: 'above', noteFontSize: 8 },
 }
 
 export function createDefaultAnnotationStyles(): AnnotationStyles {
@@ -135,16 +151,70 @@ export const AnnotationTargetSchema = z
 
 export type AnnotationTarget = z.infer<typeof AnnotationTargetSchema>
 
-export const AnnotationSchema = z
+const ShortTextSchema = z.string().trim().max(2_000)
+const RequiredTextSchema = ShortTextSchema.min(1, '请填写必要内容')
+
+export const AnnotationDetailSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('definition'), meaning: RequiredTextSchema }).strict(),
+  z.object({
+    kind: z.literal('polysemy'),
+    contextualMeaning: RequiredTextSchema,
+    otherMeanings: z.array(z.object({ meaning: RequiredTextSchema, example: ShortTextSchema }).strict()).max(30),
+  }).strict(),
+  z.object({ kind: z.literal('ancient-modern'), ancientMeaning: RequiredTextSchema, modernMeaning: RequiredTextSchema }).strict(),
+  z.object({ kind: z.literal('word-class'), usage: RequiredTextSchema, meaning: RequiredTextSchema }).strict(),
+  z.object({
+    kind: z.literal('phonetic-loan'),
+    standardCharacter: RequiredTextSchema.refine((value) => Array.from(value).length === 1, '本字必须是一个字'),
+    meaning: RequiredTextSchema,
+    pronunciation: ShortTextSchema,
+  }).strict(),
+  z.object({
+    kind: z.literal('function-word'),
+    character: RequiredTextSchema.refine((value) => Array.from(value).length === 1, '虚词必须是一个字'),
+    usageCode: RequiredTextSchema,
+    partOfSpeech: RequiredTextSchema,
+    usage: RequiredTextSchema,
+    translation: ShortTextSchema,
+  }).strict(),
+  z.object({
+    kind: z.literal('special-sentence'),
+    patterns: z.array(z.object({ category: RequiredTextSchema, categoryLabel: RequiredTextSchema, subtype: RequiredTextSchema, label: RequiredTextSchema }).strict()).min(1).max(12),
+    restoredText: ShortTextSchema,
+  }).strict(),
+  z.object({
+    kind: z.literal('pronunciation'),
+    pinyin: RequiredTextSchema.regex(/^[a-zA-ZüÜvVāáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜĀÁǍÀĒÉĚÈĪÍǏÌŌÓǑÒŪÚǓÙǕǗǙǛ\s'’-]+[1-5]?$/, '请输入拼音，如 xué 或 xue2'),
+  }).strict(),
+])
+
+export type AnnotationDetail = z.infer<typeof AnnotationDetailSchema>
+
+const AnnotationBaseSchema = z
   .object({
     id: IdSchema,
     type: AnnotationTypeSchema,
     target: AnnotationTargetSchema,
-    content: z.string().trim().min(1, '批注内容不能为空').max(20_000),
+    detail: AnnotationDetailSchema,
+    note: z.string().trim().max(20_000).default(''),
     createdAt: IsoDateSchema,
     updatedAt: IsoDateSchema,
   })
   .strict()
+
+function validateAnnotationShape(annotation: { type: AnnotationType; target: AnnotationTarget; detail: AnnotationDetail }, context: z.RefinementCtx) {
+  if (annotation.type !== annotation.detail.kind) {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['detail', 'kind'], message: '批注类型和内容结构不一致' })
+  }
+  if (annotation.type === 'pronunciation' && annotation.target.kind !== 'character') {
+    context.addIssue({ code: z.ZodIssueCode.custom, path: ['target', 'kind'], message: '注音只能用于单字' })
+  }
+}
+
+export const AnnotationSchema = AnnotationBaseSchema
+  .superRefine((annotation, context) => {
+    validateAnnotationShape(annotation, context)
+  })
 
 export type Annotation = z.infer<typeof AnnotationSchema>
 
@@ -324,11 +394,12 @@ export const UpdateGroupInputSchema = z
 
 export type UpdateGroupInput = z.input<typeof UpdateGroupInputSchema>
 
-export const CreateAnnotationInputSchema = AnnotationSchema.omit({
+export const CreateAnnotationInputSchema = AnnotationBaseSchema.omit({
   id: true,
   createdAt: true,
   updatedAt: true,
 }).superRefine((annotation, context) => {
+  validateAnnotationShape(annotation, context)
   if (!isAnnotationTypeAllowed(annotation.target.kind, annotation.type)) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
@@ -344,7 +415,8 @@ export const UpdateAnnotationInputSchema = z
   .object({
     type: AnnotationTypeSchema.optional(),
     target: AnnotationTargetSchema.optional(),
-    content: z.string().trim().min(1).max(20_000).optional(),
+    detail: AnnotationDetailSchema.optional(),
+    note: z.string().trim().max(20_000).optional(),
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0, '至少要更新一个字段')
@@ -365,6 +437,7 @@ export const AnnotationStylesPatchSchema = z
     'phonetic-loan': AnnotationStylePatchSchema.optional(),
     'function-word': AnnotationStylePatchSchema.optional(),
     'special-sentence': AnnotationStylePatchSchema.optional(),
+    pronunciation: AnnotationStylePatchSchema.optional(),
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0, '至少要更新一类批注样式')

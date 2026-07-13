@@ -61,7 +61,7 @@ function createMainWindow(): BrowserWindow {
 
 async function startApplication(): Promise<void> {
   Menu.setApplicationMenu(null)
-  const repository = new JsonRepository(path.join(app.getPath('userData'), 'data'))
+  const repository = new JsonRepository(path.join(app.getPath('userData'), 'data-v2'))
   await repository.initialize()
   registerIpcHandlers(repository)
   mainWindow = createMainWindow()

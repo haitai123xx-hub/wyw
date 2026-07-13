@@ -120,17 +120,20 @@ describe('JsonRepository', () => {
     const character = await repository.createAnnotation(project.id, {
       type: 'definition',
       target: { kind: 'character', start: 0, end: 1, text: '学' },
-      content: '学习。',
+      detail: { kind: 'definition', meaning: '学习。' },
+      note: '',
     })
     const word = await repository.createAnnotation(project.id, {
       type: 'word-class',
       target: { kind: 'word', start: wordStart, end: wordStart + 3, text: '时习之' },
-      content: '按时温习它。',
+      detail: { kind: 'word-class', usage: '名词作状语', meaning: '按时温习它。' },
+      note: '',
     })
     const sentence = await repository.createAnnotation(project.id, {
       type: 'special-sentence',
       target: { kind: 'sentence', start: 0, end: firstSentence.length, text: firstSentence },
-      content: '反问句。',
+      detail: { kind: 'special-sentence', patterns: [{ category: 'fixed', categoryLabel: '固定句式', subtype: 'rhetorical', label: '反问句式' }], restoredText: '' },
+      note: '',
     })
 
     const persisted = await repository.getProject(project.id)
@@ -154,22 +157,42 @@ describe('JsonRepository', () => {
     await expect(repository.createAnnotation(project.id, {
       type: 'special-sentence',
       target: { kind: 'character', start: 0, end: 1, text: '学' },
-      content: '字不能标特殊句式。',
+      detail: { kind: 'special-sentence', patterns: [{ category: 'fixed', categoryLabel: '固定句式', subtype: 'rhetorical', label: '反问句式' }], restoredText: '' },
     })).rejects.toMatchObject({ name: 'AppError', code: 'VALIDATION' })
 
     await expect(repository.createAnnotation(project.id, {
       type: 'phonetic-loan',
       target: { kind: 'word', start: 2, end: 4, text: '时习' },
-      content: '词不能标通假字。',
+      detail: { kind: 'phonetic-loan', standardCharacter: '悦', meaning: '高兴', pronunciation: '' },
     })).rejects.toMatchObject({ name: 'AppError', code: 'VALIDATION' })
 
     await expect(repository.createAnnotation(project.id, {
       type: 'polysemy',
       target: { kind: 'sentence', start: 0, end: originalText.length, text: originalText },
-      content: '句不能标一词多义。',
+      detail: { kind: 'polysemy', contextualMeaning: '学习', otherMeanings: [] },
     })).rejects.toMatchObject({ name: 'AppError', code: 'VALIDATION' })
 
     expect((await repository.getProject(project.id)).annotations).toHaveLength(0)
+  })
+
+  it('允许为单字注音，并拒绝给词语添加注音', async () => {
+    const repository = await initializedRepository()
+    const project = await repository.createProject({ metadata: metadata('单字注音'), originalText: '学而时习之' })
+
+    const pronunciation = await repository.createAnnotation(project.id, {
+      type: 'pronunciation',
+      target: { kind: 'character', start: 0, end: 1, text: '学' },
+      detail: { kind: 'pronunciation', pinyin: 'xué' },
+      note: '第二声',
+    })
+
+    expect(pronunciation.detail).toEqual({ kind: 'pronunciation', pinyin: 'xué' })
+    await expect(repository.createAnnotation(project.id, {
+      type: 'pronunciation',
+      target: { kind: 'word', start: 0, end: 2, text: '学而' },
+      detail: { kind: 'pronunciation', pinyin: 'xue2' },
+      note: '',
+    })).rejects.toMatchObject({ name: 'AppError', code: 'VALIDATION' })
   })
 
   it('修改原文时平移未受影响批注，并保留相交批注供重新定位', async () => {
@@ -181,17 +204,17 @@ describe('JsonRepository', () => {
     const before = await repository.createAnnotation(project.id, {
       type: 'definition',
       target: { kind: 'character', start: 0, end: 1, text: '甲' },
-      content: '修改区之前。',
+      detail: { kind: 'definition', meaning: '修改区之前。' },
     })
     const intersecting = await repository.createAnnotation(project.id, {
       type: 'definition',
       target: { kind: 'word', start: 1, end: 3, text: '乙丙' },
-      content: '与修改区相交。',
+      detail: { kind: 'definition', meaning: '与修改区相交。' },
     })
     const after = await repository.createAnnotation(project.id, {
       type: 'word-class',
       target: { kind: 'word', start: 3, end: 5, text: '丁戊' },
-      content: '修改区之后。',
+      detail: { kind: 'word-class', usage: '名词作动词', meaning: '修改区之后。' },
     })
 
     const updated = await repository.updateProject(project.id, { originalText: '甲乙新字丁戊己' })
@@ -222,7 +245,7 @@ describe('JsonRepository', () => {
       repository.createAnnotation(project.id, {
         type: 'definition',
         target: { kind: 'word', start: 2, end: 1, text: '而' },
-        content: '倒置坐标。',
+        detail: { kind: 'definition', meaning: '倒置坐标。' },
       }),
     ).rejects.toMatchObject({ name: 'AppError', code: 'VALIDATION' })
 
@@ -230,7 +253,7 @@ describe('JsonRepository', () => {
       repository.createAnnotation(project.id, {
         type: 'definition',
         target: { kind: 'word', start: 0, end: originalText.length + 1, text: originalText },
-        content: '越界坐标。',
+        detail: { kind: 'definition', meaning: '越界坐标。' },
       }),
     ).rejects.toMatchObject({ name: 'AppError', code: 'VALIDATION' })
 
@@ -238,7 +261,7 @@ describe('JsonRepository', () => {
       repository.createAnnotation(project.id, {
         type: 'definition',
         target: { kind: 'word', start: 0, end: 1, text: '而' },
-        content: '原文不匹配。',
+        detail: { kind: 'definition', meaning: '原文不匹配。' },
       }),
     ).rejects.toMatchObject({ name: 'AppError', code: 'VALIDATION' })
 
@@ -293,18 +316,18 @@ describe('JsonRepository', () => {
     const first = await repository.createAnnotation(project.id, {
       type: 'definition',
       target: { kind: 'character', start: 0, end: 1, text: '人' },
-      content: '别人。',
+      detail: { kind: 'definition', meaning: '别人。' },
     })
     const secondStart = project.originalText.indexOf('不愠')
     const second = await repository.createAnnotation(project.id, {
       type: 'ancient-modern',
       target: { kind: 'word', start: secondStart, end: secondStart + 2, text: '不愠' },
-      content: '不恼怒。',
+      detail: { kind: 'ancient-modern', ancientMeaning: '恼怒', modernMeaning: '生气' },
     })
 
     expect((await repository.getLibrary()).projects[0].annotationCount).toBe(2)
 
-    await repository.updateAnnotation(project.id, second.id, { content: '不生气。' })
+    await repository.updateAnnotation(project.id, second.id, { detail: { kind: 'ancient-modern', ancientMeaning: '恼怒', modernMeaning: '不生气' } })
     expect((await repository.getLibrary()).projects[0].annotationCount).toBe(2)
 
     await repository.deleteAnnotation(project.id, first.id)
@@ -330,7 +353,7 @@ describe('JsonRepository', () => {
         end: project.originalText.indexOf('焉') + 1,
         text: '焉',
       },
-      content: '兼词，于此。',
+      detail: { kind: 'function-word', character: '焉', usageCode: 'yu-ci', partOfSpeech: '兼词', usage: '相当于“于此”', translation: '在这里' },
     })
     await repository.updateStyles(project.id, {
       'function-word': { fontColor: '#334455', bold: true },

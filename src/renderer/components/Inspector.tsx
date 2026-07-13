@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ALLOWED_ANNOTATION_TYPES, isAnnotationTypeAllowed } from '@shared/annotation-rules';
+import { annotationSearchText, annotationSummary } from '@shared/annotation-display';
 import { ANNOTATION_TYPES, TARGET_KINDS, annotationTypeMeta } from '../constants';
 import { CheckIcon, ChevronIcon, CloseIcon, ListIcon, NoteIcon, PlusIcon, SearchIcon, SparkleIcon, StyleIcon, TrashIcon } from '../icons';
+import type { AnnotationDetail } from '@shared/models';
 import type { Annotation, AnnotationStyle, AnnotationType, Project, TargetKind, TextSelection } from '../types';
+import { AnnotationDetailEditor, createEmptyDetail, isDetailComplete } from './AnnotationDetailEditor';
 
 type InspectorTab = 'editor' | 'list' | 'style';
 
@@ -27,7 +30,8 @@ interface AnnotationInput {
     text: string;
     status: 'valid' | 'needs-review';
   };
-  content: string;
+  detail: AnnotationDetail;
+  note: string;
 }
 
 interface InspectorProps {
@@ -70,7 +74,8 @@ export function Inspector({
   const [tab, setTab] = useState<InspectorTab>('editor');
   const [type, setType] = useState<AnnotationType>('definition');
   const [kind, setKind] = useState<TargetKind>('word');
-  const [content, setContent] = useState('');
+  const [detail, setDetail] = useState<AnnotationDetail>(() => createEmptyDetail('definition', ''));
+  const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
   const [listQuery, setListQuery] = useState('');
   const [listType, setListType] = useState<AnnotationType | 'all'>('all');
@@ -86,13 +91,15 @@ export function Inspector({
       setTab('editor');
       setType(activeAnnotation.type);
       setKind(activeAnnotation.target.kind);
-      setContent(activeAnnotation.content);
+      setDetail(activeAnnotation.detail);
+      setNote(activeAnnotation.note);
       setSaveError('');
     } else if (selection) {
       setTab('editor');
       setType('definition');
       setKind(inferKind(selection.text));
-      setContent('');
+      setDetail(createEmptyDetail('definition', selection.text));
+      setNote('');
       setSaveError('');
     }
   }, [activeAnnotation, selection]);
@@ -107,7 +114,10 @@ export function Inspector({
   }, [customBackgroundColors, customFontColors]);
 
   useEffect(() => {
-    if (!isAnnotationTypeAllowed(kind, type)) setType('definition');
+    if (!isAnnotationTypeAllowed(kind, type)) {
+      setType('definition');
+      setDetail(createEmptyDetail('definition', selection?.text ?? activeAnnotation?.target.text ?? ''));
+    }
   }, [kind, type]);
 
   useEffect(() => {
@@ -122,6 +132,11 @@ export function Inspector({
   const allowedTypes = ALLOWED_ANNOTATION_TYPES[kind];
   const fontColorOptions = [...new Set([...FONT_COLOR_PRESETS, ...customFontColors, styleDraft.fontColor])];
   const backgroundColorOptions = [...new Set([...BACKGROUND_COLOR_PRESETS, ...customBackgroundColors, styleDraft.backgroundColor])];
+  const selectType = (nextType: AnnotationType) => {
+    setType(nextType);
+    setDetail(createEmptyDetail(nextType, target?.text ?? ''));
+    setNote('');
+  };
 
   const addCustomColor = (target: 'font' | 'background', color: string) => {
     const normalized = color.toUpperCase();
@@ -137,23 +152,25 @@ export function Inspector({
     const keyword = listQuery.trim().toLocaleLowerCase();
     return [...project.annotations]
       .filter((annotation) => listType === 'all' || annotation.type === listType)
-      .filter((annotation) => !keyword || annotation.target.text.toLocaleLowerCase().includes(keyword) || annotation.content.toLocaleLowerCase().includes(keyword))
+      .filter((annotation) => !keyword || annotationSearchText(annotation).toLocaleLowerCase().includes(keyword))
       .sort((a, b) => a.target.start - b.target.start);
   }, [listQuery, listType, project.annotations]);
 
   const submit = async () => {
-    if (!target || !content.trim() || saving || (isRelinking && !selection)) return;
+    if (!target || !isDetailComplete(detail) || saving || (isRelinking && !selection)) return;
     setSaving(true);
     setSaveError('');
     const input: AnnotationInput = {
       type,
       target: { kind, start: target.start, end: target.end, text: target.text, status: target.status },
-      content: content.trim(),
+      detail,
+      note: note.trim(),
     };
     try {
       if (activeAnnotation) await onUpdateAnnotation(activeAnnotation.id, input);
       else await onCreateAnnotation(input);
-      setContent('');
+      setDetail(createEmptyDetail(type, target.text));
+      setNote('');
     } catch (reason) {
       setSaveError(reason instanceof Error ? reason.message : '批注保存失败，请重试');
     } finally {
@@ -243,7 +260,7 @@ export function Inspector({
                     <button
                       key={item.id}
                       className={type === item.id ? 'active' : ''}
-                      onClick={() => setType(item.id)}
+                      onClick={() => selectType(item.id)}
                       style={{ '--type-color': project.styles[item.id]?.fontColor, '--type-bg': project.styles[item.id]?.backgroundColor } as React.CSSProperties}
                     >
                       <span>{item.shortLabel}</span><b>{item.label}</b>{type === item.id && <CheckIcon size={13} />}
@@ -252,25 +269,18 @@ export function Inspector({
                 </div>
               </div>
 
-              <div className="form-section grow">
-                <label className="field-label" htmlFor="annotation-content">批注内容</label>
-                <div className="textarea-wrap">
-                  <textarea
-                    id="annotation-content"
-                    value={content}
-                    onChange={(event) => setContent(event.target.value)}
-                    placeholder={`写下${annotationTypeMeta(type).description}……`}
-                    autoFocus={!activeAnnotation}
-                    maxLength={2000}
-                  />
-                  <span>{content.length}/2000</span>
-                </div>
-                <div className="writing-hint"><SparkleIcon size={14} /><span>可记录释义、例句、辨析或自己的理解</span></div>
+              <div className="form-section grow structured-editor">
+                <label className="field-label">{annotationTypeMeta(type).label}内容</label>
+                <AnnotationDetailEditor detail={detail} targetText={target.text} targetKind={kind} onChange={setDetail} />
+                <details className="optional-note" open={Boolean(note)}>
+                  <summary><SparkleIcon size={14} />添加补充说明（可选）</summary>
+                  <div className="textarea-wrap"><textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder="记录例句、辨析或自己的理解" maxLength={2000} /><span>{note.length}/2000</span></div>
+                </details>
               </div>
 
               <div className="editor-actions">
                 {activeAnnotation && <button className="danger-button" onClick={remove} disabled={saving}><TrashIcon size={16} />删除</button>}
-                <button className="save-button" onClick={submit} disabled={!content.trim() || saving || (isRelinking && !selection)}>{saving ? '保存中…' : isRelinking ? '保存新位置' : activeAnnotation ? '保存修改' : '添加批注'}</button>
+                <button className="save-button" onClick={submit} disabled={!isDetailComplete(detail) || saving || (isRelinking && !selection)}>{saving ? '保存中…' : isRelinking ? '保存新位置' : activeAnnotation ? '保存修改' : '添加批注'}</button>
               </div>
               {saveError && <div className="form-error annotation-save-error">{saveError}</div>}
             </>
@@ -308,7 +318,7 @@ export function Inspector({
                   <span className="annotation-card-main">
                     <span className="annotation-card-head"><b style={{ color: style.fontColor, background: style.backgroundColor }}>{meta.label}</b><small>{annotation.target.status === 'needs-review' ? '待重新定位' : `${annotation.target.kind === 'character' ? '字' : annotation.target.kind === 'word' ? '词' : '句'} · ${annotation.target.start + 1}–${annotation.target.end}`}</small></span>
                     <strong className="annotation-quote">“{annotation.target.text}”</strong>
-                    <span className="annotation-content-preview">{annotation.content}</span>
+                    <span className="annotation-content-preview">{annotationSummary(annotation)}</span>
                   </span>
                 </button>
               );
@@ -336,14 +346,21 @@ export function Inspector({
             <span>样式预览</span>
             <p>学而时习之，不亦<span style={{
               color: styleDraft.fontColor,
-              background: styleDraft.backgroundColor,
+              background: styleDraft.mark === 'background' || styleDraft.mark === 'combined' ? `color-mix(in srgb, ${styleDraft.backgroundColor} ${styleDraft.backgroundOpacity}%, transparent)` : 'transparent',
               fontWeight: styleDraft.bold ? 700 : 400,
-              textDecoration: styleDraft.underline ? 'underline' : 'none',
+              textDecorationLine: styleDraft.underline || ['underline', 'dashed', 'wavy', 'combined'].includes(styleDraft.mark) ? 'underline' : 'none',
+              textDecorationStyle: styleDraft.mark === 'dashed' ? 'dashed' : styleDraft.mark === 'wavy' ? 'wavy' : 'solid',
+              textDecorationColor: styleDraft.fontColor,
               textUnderlineOffset: '5px',
               fontStyle: styleDraft.italic ? 'italic' : 'normal',
               fontFamily: styleDraft.fontFamily,
               fontSize: `${styleDraft.fontSize}px`,
-            }}>说</span>乎？</p>
+              textEmphasisStyle: styleDraft.mark === 'dot' ? 'filled dot' : undefined,
+              textEmphasisPosition: styleDraft.mark === 'dot' ? 'under' : undefined,
+              '--preview-note-color': styleDraft.fontColor,
+              '--preview-note-size': `${styleDraft.noteFontSize}px`,
+              '--preview-note-font': styleDraft.fontFamily,
+            } as React.CSSProperties} className="style-preview-target" data-preview-above={styleDraft.notePosition === 'above' ? `${annotationTypeMeta(styleType).shortLabel}：批注内容` : undefined} data-preview-below={styleDraft.notePosition === 'below' ? `${annotationTypeMeta(styleType).shortLabel}：批注内容` : undefined}>说</span>乎？</p>
           </div>
 
           <div className="style-form">
@@ -361,12 +378,18 @@ export function Inspector({
                 <label className="color-add" title="添加背景颜色"><PlusIcon size={14} /><input type="color" defaultValue="#FFF7ED" onChange={(event) => addCustomColor('background', event.target.value)} /></label>
               </div>
             </div>
+            <label className="select-field"><span>标记方式</span><select value={styleDraft.mark} onChange={(event) => setStyleDraft({ ...styleDraft, mark: event.target.value as AnnotationStyle['mark'] })}><option value="combined">文字颜色＋下划线＋浅底色</option><option value="color">仅改变文字颜色</option><option value="background">浅色背景</option><option value="underline">实线下划线</option><option value="dashed">虚线下划线</option><option value="wavy">波浪线</option><option value="dot">字下圆点</option></select></label>
+            <label className="select-field"><span>批注内容位置</span><select value={styleDraft.notePosition} onChange={(event) => setStyleDraft({ ...styleDraft, notePosition: event.target.value as AnnotationStyle['notePosition'] })}><option value="above">显示在原文上方</option><option value="below">显示在原文下方</option><option value="hidden">正文中隐藏内容</option></select></label>
+            <label className="range-field"><span>批注文字大小 <b>{styleDraft.noteFontSize}px</b></span><input type="range" min="7" max="18" step="1" value={styleDraft.noteFontSize} onChange={(event) => setStyleDraft({ ...styleDraft, noteFontSize: Number(event.target.value) })} /></label>
+            <label className="range-field"><span>背景透明度 <b>{styleDraft.backgroundOpacity}%</b></span><input type="range" min="0" max="60" step="2" value={styleDraft.backgroundOpacity} onChange={(event) => setStyleDraft({ ...styleDraft, backgroundOpacity: Number(event.target.value) })} /></label>
             <label className="select-field"><span>字体</span><select value={styleDraft.fontFamily} onChange={(event) => setStyleDraft({ ...styleDraft, fontFamily: event.target.value })}><option value="serif">系统宋体</option><option value="KaiTi, STKaiti, serif">楷体</option><option value="FangSong, STFangsong, serif">仿宋</option><option value="Microsoft YaHei, sans-serif">微软雅黑</option></select></label>
             <label className="range-field"><span>字号 <b>{styleDraft.fontSize}px</b></span><input type="range" min="15" max="26" step="1" value={styleDraft.fontSize} onChange={(event) => setStyleDraft({ ...styleDraft, fontSize: Number(event.target.value) })} /></label>
+            <label className="range-field"><span>重叠显示优先级 <b>{styleDraft.priority}</b></span><input type="range" min="1" max="99" step="1" value={styleDraft.priority} onChange={(event) => setStyleDraft({ ...styleDraft, priority: Number(event.target.value) })} /></label>
             <div className="toggle-fields">
               <button className={styleDraft.bold ? 'active' : ''} onClick={() => setStyleDraft({ ...styleDraft, bold: !styleDraft.bold })}><b>B</b>加粗</button>
               <button className={styleDraft.underline ? 'active' : ''} onClick={() => setStyleDraft({ ...styleDraft, underline: !styleDraft.underline })}><u>U</u>下划线</button>
               <button className={styleDraft.italic ? 'active' : ''} onClick={() => setStyleDraft({ ...styleDraft, italic: !styleDraft.italic })}><i>I</i>斜体</button>
+              <button className={styleDraft.visible ? 'active' : ''} onClick={() => setStyleDraft({ ...styleDraft, visible: !styleDraft.visible })}>{styleDraft.visible ? <CheckIcon size={12} /> : <CloseIcon size={12} />}默认显示</button>
             </div>
           </div>
           <button className="save-button style-save" onClick={saveStyle} disabled={styleSaving}>{styleSaving ? '应用中…' : `应用到「${annotationTypeMeta(styleType).label}」`}</button>
