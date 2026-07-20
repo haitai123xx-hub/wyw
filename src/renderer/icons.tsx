@@ -1,8 +1,10 @@
+/** 图标适配层：业务组件只依赖这里，未来替换 SVG 风格时无需逐页改动。 */
 import type { SVGProps } from 'react';
 
 type IconProps = SVGProps<SVGSVGElement> & { size?: number };
 
 function IconBase({ size = 18, children, ...props }: IconProps) {
+  // currentColor 让图标自动继承按钮文字颜色；其余 props 会继续传给 svg。
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
       {children}
@@ -10,6 +12,7 @@ function IconBase({ size = 18, children, ...props }: IconProps) {
   );
 }
 
+// 每个导出组件只定义路径，尺寸、线宽和无障碍属性统一由 IconBase 管理。
 export const SearchIcon = (props: IconProps) => <IconBase {...props}><circle cx="11" cy="11" r="7" /><path d="m20 20-3.4-3.4" /></IconBase>;
 export const PlusIcon = (props: IconProps) => <IconBase {...props}><path d="M12 5v14M5 12h14" /></IconBase>;
 export const ImportIcon = (props: IconProps) => <IconBase {...props}><path d="M12 3v12m0 0 4-4m-4 4-4-4" /><path d="M5 19h14" /></IconBase>;
@@ -31,4 +34,3 @@ export const EditIcon = (props: IconProps) => <IconBase {...props}><path d="m4 2
 export const SparkleIcon = (props: IconProps) => <IconBase {...props}><path d="m12 3 1.2 4.1L17 9l-3.8 1.9L12 15l-1.2-4.1L7 9l3.8-1.9zM19 15l.6 2.1L22 18l-2.4.9L19 21l-.6-2.1L16 18l2.4-.9z" /></IconBase>;
 export const InfoIcon = (props: IconProps) => <IconBase {...props}><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7.5h.01" /></IconBase>;
 export const UndoIcon = (props: IconProps) => <IconBase {...props}><path d="m9 7-5 5 5 5" /><path d="M4 12h9a6 6 0 0 1 6 6" /></IconBase>;
-

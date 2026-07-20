@@ -1,3 +1,4 @@
+/** 把 Zod、Node 文件系统和未知异常统一成前端可理解的错误结构。 */
 import { ZodError } from 'zod'
 import type { ApiErrorPayload } from '../shared/api'
 
@@ -23,6 +24,7 @@ function zodDetails(error: ZodError): unknown {
 }
 
 export function normalizeError(error: unknown): AppError {
+  // 业务层主动抛出的 AppError 已经带有正确错误码，直接保留。
   if (error instanceof AppError) return error
 
   if (error instanceof ZodError) {
@@ -53,6 +55,7 @@ export function normalizeError(error: unknown): AppError {
 }
 
 export function errorPayload(error: unknown): ApiErrorPayload {
+  // Error 对象不能完整跨 IPC 传输，因此这里只返回普通对象。
   const normalized = normalizeError(error)
   return {
     code: normalized.code,

@@ -1,4 +1,5 @@
 <!doctype html>
+<!-- electron-vite 的 renderer 页面外壳；实际内容由 React 挂载到 #root。 -->
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
@@ -7,8 +8,9 @@
     <title>墨笺 · 文言文批注笔记</title>
   </head>
   <body>
+    <!-- ReactDOM.createRoot 会接管这个节点。 -->
     <div id="root"></div>
+    <!-- Vite 从这里找到 TSX 入口，并在构建时替换为生成后的 JS 文件。 -->
     <script type="module" src="./main.tsx"></script>
   </body>
 </html>
-

@@ -1,8 +1,8 @@
 {
+  // 根配置本身不编译文件，只把 Node/Electron 和 Web/React 两套配置组成一个工程。
   "files": [],
   "references": [
     { "path": "./tsconfig.node.json" },
     { "path": "./tsconfig.web.json" }
   ]
 }
-

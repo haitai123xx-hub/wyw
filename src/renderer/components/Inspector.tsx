@@ -1,3 +1,7 @@
+/**
+ * 右侧检查器：在“批注编辑、批注列表、显示样式”三个标签之间切换。
+ * 表单状态先保存在本组件中，点击保存后才通过 App 回调写入后端。
+ */
 import { useEffect, useMemo, useState } from 'react';
 import { ALLOWED_ANNOTATION_TYPES, isAnnotationTypeAllowed } from '@shared/annotation-rules';
 import { annotationSearchText, annotationSummary } from '@shared/annotation-display';
@@ -13,6 +17,7 @@ const FONT_COLOR_PRESETS = ['#292723', '#7F3C32', '#1D4ED8', '#6D28D9', '#047857
 const BACKGROUND_COLOR_PRESETS: AnnotationStyle['backgroundColor'][] = ['transparent', '#FFF7ED', '#FEF3C7', '#D1FAE5', '#DBEAFE', '#EDE9FE', '#FFE4E6', '#FCE7F3'];
 
 function readCustomPalette(key: string): string[] {
+  // localStorage 可能被手动改坏，因此只接受 #RRGGBB 字符串数组。
   try {
     const value = JSON.parse(localStorage.getItem(key) ?? '[]');
     return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && /^#[\dA-F]{6}$/i.test(item)) : [];
@@ -51,6 +56,7 @@ interface InspectorProps {
 }
 
 function inferKind(text: string): TargetKind {
+  // 新选区只做方便用户的初步推断，用户仍可在界面中改为字、词或句。
   if ([...text].length === 1) return 'character';
   if (/[。！？；]$/.test(text) || text.length > 12) return 'sentence';
   return 'word';
@@ -71,6 +77,7 @@ export function Inspector({
   onHide,
   hidden = false,
 }: InspectorProps) {
+  // editor 页的草稿状态。
   const [tab, setTab] = useState<InspectorTab>('editor');
   const [type, setType] = useState<AnnotationType>('definition');
   const [kind, setKind] = useState<TargetKind>('word');
@@ -87,6 +94,7 @@ export function Inspector({
   const [customBackgroundColors, setCustomBackgroundColors] = useState(() => readCustomPalette('mojian-background-palette'));
 
   useEffect(() => {
+    // 打开已有批注时载入原值；创建新批注时根据选区生成空白表单。
     if (activeAnnotation) {
       setTab('editor');
       setType(activeAnnotation.type);
@@ -105,15 +113,18 @@ export function Inspector({
   }, [activeAnnotation, selection]);
 
   useEffect(() => {
+    // 切换项目或样式类型后，用已保存样式重置草稿。
     setStyleDraft(project.styles[styleType]);
   }, [project.id, project.styles, styleType]);
 
   useEffect(() => {
+    // 用户扩充的色卡是全局界面偏好，不进入单篇项目 JSON。
     localStorage.setItem('mojian-font-palette', JSON.stringify(customFontColors));
     localStorage.setItem('mojian-background-palette', JSON.stringify(customBackgroundColors));
   }, [customBackgroundColors, customFontColors]);
 
   useEffect(() => {
+    // 粒度改变后若当前类型不再合法，自动退回所有粒度都支持的“释义”。
     if (!isAnnotationTypeAllowed(kind, type)) {
       setType('definition');
       setDetail(createEmptyDetail('definition', selection?.text ?? activeAnnotation?.target.text ?? ''));
@@ -127,6 +138,7 @@ export function Inspector({
   }, [isRelinking, kind, selection]);
 
   const target = isRelinking && selection
+    // 重新定位时保留批注内容，但用新选区替换 target 坐标。
     ? { ...selection, kind, status: 'valid' as const }
     : activeAnnotation?.target ?? (selection ? { ...selection, kind, status: 'valid' as const } : null);
   const allowedTypes = ALLOWED_ANNOTATION_TYPES[kind];
@@ -139,6 +151,7 @@ export function Inspector({
   };
 
   const addCustomColor = (target: 'font' | 'background', color: string) => {
+    // 统一保存为大写十六进制，并用 includes 避免重复色卡。
     const normalized = color.toUpperCase();
     if (target === 'font') {
       setCustomFontColors((colors) => colors.includes(normalized) ? colors : [...colors, normalized]);
@@ -149,6 +162,7 @@ export function Inspector({
     }
   };
   const filteredAnnotations = useMemo(() => {
+    // 搜索文本由 shared/annotation-display 统一生成，涵盖原文、结构化内容和笔记。
     const keyword = listQuery.trim().toLocaleLowerCase();
     return [...project.annotations]
       .filter((annotation) => listType === 'all' || annotation.type === listType)
@@ -157,6 +171,7 @@ export function Inspector({
   }, [listQuery, listType, project.annotations]);
 
   const submit = async () => {
+    // 保存条件集中在入口判断，防止重复点击或必填内容不完整时发出请求。
     if (!target || !isDetailComplete(detail) || saving || (isRelinking && !selection)) return;
     setSaving(true);
     setSaveError('');
@@ -167,6 +182,7 @@ export function Inspector({
       note: note.trim(),
     };
     try {
+      // 同一表单通过 activeAnnotation 判断当前是创建还是更新。
       if (activeAnnotation) await onUpdateAnnotation(activeAnnotation.id, input);
       else await onCreateAnnotation(input);
       setDetail(createEmptyDetail(type, target.text));
@@ -191,6 +207,7 @@ export function Inspector({
   };
 
   const saveStyle = async () => {
+    // styleDraft 是可撤销草稿，只有这里成功后才进入本机用户预设。
     if (styleSaving) return;
     setStyleSaving(true);
     try {
@@ -330,8 +347,8 @@ export function Inspector({
 
       {tab === 'style' && (
         <div className="inspector-content style-panel">
-          <header className="panel-title-row compact"><div><span className="eyebrow">显示设置</span><h2>批注样式</h2></div></header>
-          <p className="panel-intro">为每种批注分别设置字体与标记方式，修改后会立即应用到全文。</p>
+          <header className="panel-title-row compact"><div><span className="eyebrow">本机显示设置</span><h2>我的批注预设</h2></div></header>
+          <p className="panel-intro">预设会应用到本机的所有文章和新导入笔记，不会写入或导出到分享文件。</p>
           <div className="style-type-list">
             {ANNOTATION_TYPES.map((item) => (
               <button key={item.id} className={styleType === item.id ? 'active' : ''} onClick={() => setStyleType(item.id)}>
@@ -392,7 +409,7 @@ export function Inspector({
               <button className={styleDraft.visible ? 'active' : ''} onClick={() => setStyleDraft({ ...styleDraft, visible: !styleDraft.visible })}>{styleDraft.visible ? <CheckIcon size={12} /> : <CloseIcon size={12} />}默认显示</button>
             </div>
           </div>
-          <button className="save-button style-save" onClick={saveStyle} disabled={styleSaving}>{styleSaving ? '应用中…' : `应用到「${annotationTypeMeta(styleType).label}」`}</button>
+          <button className="save-button style-save" onClick={saveStyle} disabled={styleSaving}>{styleSaving ? '保存中…' : `保存「${annotationTypeMeta(styleType).label}」本机预设`}</button>
         </div>
       )}
     </aside>

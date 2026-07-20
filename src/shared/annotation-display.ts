@@ -1,6 +1,8 @@
+/** 把结构化批注转换为详情、行间摘要和搜索文本。 */
 import type { Annotation, AnnotationDetail } from './models'
 
 export function annotationDetailLines(detail: AnnotationDetail): string[] {
+  // detail.kind 是辨识字段；每个 case 中 TypeScript 都知道该类型拥有哪些字段。
   switch (detail.kind) {
     case 'definition': return [detail.meaning]
     case 'polysemy': return [
@@ -20,11 +22,13 @@ export function annotationDetailLines(detail: AnnotationDetail): string[] {
 }
 
 export function annotationSummary(annotation: Pick<Annotation, 'detail' | 'note'>): string {
+  // Pick 表示这里只需要 Annotation 的 detail 和 note 两个字段。
   const lines = annotationDetailLines(annotation.detail)
   return lines[0] || annotation.note || ''
 }
 
 export function annotationInlineText(annotation: Pick<Annotation, 'detail'>): string {
+  // 行间空间有限，因此这里使用比详情卡片更短的表达。
   const detail = annotation.detail
   switch (detail.kind) {
     case 'definition': return `释：${detail.meaning}`
@@ -39,5 +43,6 @@ export function annotationInlineText(annotation: Pick<Annotation, 'detail'>): st
 }
 
 export function annotationSearchText(annotation: Pick<Annotation, 'target' | 'detail' | 'note'>): string {
+  // 把原文、结构化内容和补充笔记拼接，供右侧列表进行一次字符串搜索。
   return [annotation.target.text, ...annotationDetailLines(annotation.detail), annotation.note].join(' ')
 }

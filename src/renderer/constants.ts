@@ -1,5 +1,7 @@
+/** renderer 的展示元数据、默认样式和内置示例；业务数据类型仍以 shared 为准。 */
 import type { AnnotationStyle, AnnotationType, TargetKind } from './types';
 
+// id 是持久化值，label/hint 只用于中文界面。
 export const ANNOTATION_TYPES: Array<{
   id: AnnotationType;
   label: string;
@@ -25,6 +27,7 @@ export const TARGET_KINDS: Array<{ id: TargetKind; label: string; hint: string }
 
 const DISPLAY_DEFAULTS = { mark: 'combined' as const, backgroundOpacity: 18, visible: true, priority: 10, notePosition: 'below' as const, noteFontSize: 9 };
 
+// 浏览器预览需要一份 renderer 默认样式；Electron 正式数据由 shared/models 创建。
 export const DEFAULT_STYLES: Record<AnnotationType, AnnotationStyle> = {
   definition: { ...DISPLAY_DEFAULTS, priority: 10, fontColor: '#245f50', backgroundColor: '#e3f0e9', bold: false, underline: true, italic: false, fontFamily: 'serif', fontSize: 18 },
   polysemy: { ...DISPLAY_DEFAULTS, priority: 30, notePosition: 'above', fontColor: '#7d511f', backgroundColor: '#f4ead7', bold: false, underline: true, italic: false, fontFamily: 'serif', fontSize: 18 },
@@ -41,5 +44,6 @@ export const GROUP_COLORS = ['#9f5545', '#356b5f', '#4e628d', '#8a6a35', '#72578
 export const SAMPLE_TEXT = `晋太元中，武陵人捕鱼为业。缘溪行，忘路之远近。忽逢桃花林，夹岸数百步，中无杂树，芳草鲜美，落英缤纷。渔人甚异之，复前行，欲穷其林。\n\n林尽水源，便得一山，山有小口，仿佛若有光。便舍船，从口入。初极狭，才通人。复行数十步，豁然开朗。土地平旷，屋舍俨然，有良田、美池、桑竹之属。阡陌交通，鸡犬相闻。`;
 
 export function annotationTypeMeta(type: AnnotationType) {
+  // 正常数据一定能找到；兜底项让损坏数据也不会使整个页面崩溃。
   return ANNOTATION_TYPES.find((item) => item.id === type) ?? ANNOTATION_TYPES[0];
 }

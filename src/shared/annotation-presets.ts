@@ -1,3 +1,7 @@
+/**
+ * 语文知识预制选项。
+ * 这些数组只提供用户可选内容，不负责保存；最终选择会进入 Annotation.detail。
+ */
 export const WORD_CLASS_USAGES = [
   ['noun-as-verb', '名词作动词'],
   ['noun-as-adverbial', '名词作状语'],
@@ -11,6 +15,7 @@ export const WORD_CLASS_USAGES = [
   ['other', '其他'],
 ] as const
 
+// 特殊句式分为大类和具体形式，Inspector 可把它们渲染成多选按钮。
 export const SPECIAL_SENTENCE_PRESETS = [
   { category: 'judgment', categoryLabel: '判断句', options: [
     ['zhe-ye', '……者，……也'], ['zheye', '……者也'], ['ye', '……也'],
@@ -43,6 +48,7 @@ export interface FunctionWordUsagePreset {
 
 const p = (id: string, partOfSpeech: string, usage: string, translation: string): FunctionWordUsagePreset => ({ id, partOfSpeech, usage, translation })
 
+// 用虚词本身作为键，选择原文中的虚词后即可直接查到常见考法。
 export const FUNCTION_WORD_PRESETS: Record<string, FunctionWordUsagePreset[]> = {
   而: [p('parallel','连词','表并列','又、并且'),p('progressive','连词','表递进','而且、并且'),p('sequence','连词','表承接','然后、就'),p('contrast','连词','表转折','但是、却'),p('modifier','连词','表修饰','着、地，通常不译'),p('hypothesis','连词','表假设','如果、假如'),p('cause','连词','表因果','因而、所以'),p('purpose','连词','表目的','来、用来')],
   何: [p('what','疑问代词','问事物','什么'),p('where','疑问代词','问处所','哪里'),p('why','疑问副词','问原因','为什么'),p('how','疑问副词','问方式','怎么'),p('degree','副词','表程度','多么'),p('heru','固定结构','何如／若何','怎么样'),p('naihe','固定结构','奈何','怎么办'),p('heyi','固定结构','何以','凭什么、为什么')],
@@ -64,4 +70,5 @@ export const FUNCTION_WORD_PRESETS: Record<string, FunctionWordUsagePreset[]> = 
   之: [p('third-person','代词','第三人称','他、它、他们、它们'),p('demonstrative','代词','指示','这、这件事'),p('possessive','助词','结构助词','的'),p('cancel-independence','助词','取消句子独立性','不译'),p('object-preposed','助词','宾语前置标志','不译'),p('attribute-postposed','助词','定语后置标志','不译'),p('syllable','助词','补足音节','不译')],
 }
 
+// Object.keys 自动从预设表获得虚词列表，增加预设时不必维护第二份名单。
 export const COMMON_FUNCTION_WORDS = Object.keys(FUNCTION_WORD_PRESETS)

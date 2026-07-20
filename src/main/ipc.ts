@@ -1,3 +1,9 @@
+/**
+ * 主进程的 IPC 请求路由。
+ *
+ * preload 发来的所有操作先经过 Zod 校验，再根据 method 分发给 JsonRepository。
+ * 无论成功还是失败都返回统一信封，renderer 不需要接触 Node/Electron 原始异常。
+ */
 import { app, dialog, ipcMain } from 'electron'
 import { ApiRequestSchema, IPC_CHANNEL, type ApiEnvelope } from '../shared/api'
 import type { ProjectDocument } from '../shared/models'
@@ -9,11 +15,13 @@ function ok<T>(data: T): ApiEnvelope<T> {
 }
 
 function safeFileName(value: string): string {
+  // 去掉 Windows 文件名不允许的字符，避免文章标题破坏导出路径。
   const sanitized = value.replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_').replace(/[. ]+$/g, '').trim()
   return (sanitized || '未命名项目').slice(0, 100)
 }
 
 export function registerIpcHandlers(repository: JsonRepository): void {
+  // 开发热更新可能重复执行注册，先移除旧 handler 可避免重复监听。
   ipcMain.removeHandler(IPC_CHANNEL)
   ipcMain.handle(IPC_CHANNEL, async (_event, rawRequest: unknown): Promise<ApiEnvelope<unknown>> => {
     const parsedRequest = ApiRequestSchema.safeParse(rawRequest)
@@ -33,6 +41,7 @@ export function registerIpcHandlers(repository: JsonRepository): void {
 
     const request = parsedRequest.data
     try {
+      // method 是可辨识联合类型，进入每个 case 后 TypeScript 会自动缩小 payload 类型。
       switch (request.method) {
         case 'getLibrary':
           return ok(await repository.getLibrary())
@@ -67,6 +76,7 @@ export function registerIpcHandlers(repository: JsonRepository): void {
         case 'updateStyles':
           return ok(await repository.updateStyles(request.payload.projectId, request.payload.patch))
         case 'importProject': {
+          // 文件选择器必须由主进程打开；renderer 没有直接读取任意文件的权限。
           const selection = await dialog.showOpenDialog({
             title: '导入文言笔记项目',
             properties: ['openFile'],
@@ -94,11 +104,13 @@ export function registerIpcHandlers(repository: JsonRepository): void {
         }
       }
     } catch (error) {
+      // 仓库异常被转换为可序列化数据后才能安全地跨进程返回。
       return { ok: false, error: errorPayload(error) }
     }
   })
 }
 
 export function unregisterIpcHandlers(): void {
+  // 应用退出时清理处理器，便于测试和开发热重载。
   ipcMain.removeHandler(IPC_CHANNEL)
 }

@@ -1,5 +1,6 @@
 {
   "compilerOptions": {
+    // renderer 在 Chromium 中运行，因此同时需要 ES 和浏览器 DOM 类型。
     "target": "ES2022",
     "useDefineForClassFields": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
@@ -10,15 +11,19 @@
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
     "resolveJsonModule": true,
+    // Vite 会逐文件转换 TS，isolatedModules 可提前禁止不兼容这种方式的写法。
     "isolatedModules": true,
+    // tsc 只做类型检查；真正的 JS/CSS 输出交给 Vite。
     "noEmit": true,
+    // 使用 React 现代 JSX 转换，不要求每个组件文件显式 import React。
     "jsx": "react-jsx",
     "baseUrl": ".",
+    // 分别为 renderer 和 shared 建立简短、稳定的导入别名。
     "paths": {
       "@renderer/*": ["src/renderer/*"],
       "@shared/*": ["src/shared/*"]
     }
   },
+  // Web 检查只覆盖 React 页面和它引用的公共模型。
   "include": ["src/renderer/**/*.ts", "src/renderer/**/*.tsx", "src/shared/**/*.ts"]
 }
-

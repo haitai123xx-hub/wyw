@@ -1,3 +1,4 @@
+/** 修改原文后迁移批注坐标，避免简单增删文字导致全部批注失效。 */
 import type { Annotation } from './models'
 
 export interface TextMigrationResult {
@@ -20,12 +21,14 @@ export function migrateAnnotationsForTextChange(
   }
 
   let prefixLength = 0
+  // 从左向右寻找新旧文本完全相同的公共前缀。
   const prefixLimit = Math.min(previousText.length, nextText.length)
   while (prefixLength < prefixLimit && previousText[prefixLength] === nextText[prefixLength]) {
     prefixLength += 1
   }
 
   let suffixLength = 0
+  // 再从右向左寻找公共后缀；中间剩余部分被视为本次修改区域。
   const suffixLimit = Math.min(previousText.length - prefixLength, nextText.length - prefixLength)
   while (
     suffixLength < suffixLimit &&
@@ -45,9 +48,11 @@ export function migrateAnnotationsForTextChange(
     }
 
     const { start, end } = annotation.target
+    // 修改区之前的批注位置完全不变。
     if (end <= prefixLength) return annotation
 
     if (start >= previousChangedEnd) {
+      // 修改区之后的批注整体平移新旧文本长度差。
       return {
         ...annotation,
         target: { ...annotation.target, start: start + delta, end: end + delta },
@@ -56,6 +61,7 @@ export function migrateAnnotationsForTextChange(
     }
 
     reviewCount += 1
+    // 与修改区相交时无法可靠猜测新位置，保留批注并等待用户重新定位。
     return {
       ...annotation,
       target: { ...annotation.target, status: 'needs-review' },

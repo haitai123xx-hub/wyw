@@ -1,19 +1,24 @@
 {
   "compilerOptions": {
+    // main、preload 和测试运行在现代 Node/Electron 环境，可使用 ES2022 语法。
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    // strict 开启完整的空值、参数和类型安全检查。
     "strict": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "allowSyntheticDefaultImports": true,
+    // 引入 Node.js 与 electron-vite 提供的全局类型，不引入浏览器 DOM 类型。
     "types": ["node", "electron-vite/node"],
     "baseUrl": ".",
+    // @shared/* 是源码路径别名，避免跨目录导入出现大量 ../../。
     "paths": {
       "@shared/*": ["src/shared/*"]
     }
   },
+  // 只检查后端、preload、公共层、构建配置和测试。
   "include": [
     "electron.vite.config.ts",
     "vitest.config.ts",
@@ -23,4 +28,3 @@
     "tests/**/*.ts"
   ]
 }
-

@@ -1,5 +1,11 @@
+/**
+ * JsonRepository 集成测试。
+ *
+ * 每个用例在项目内的 .test-data/<随机 UUID> 中创建真实 JSON 文件，直接验证磁盘
+ * 结果，而不是模拟 fs。afterEach 会严格确认路径仍在测试根目录下再递归清理。
+ */
 import { randomUUID } from 'node:crypto'
-import { readFile, rm, stat } from 'node:fs/promises'
+import { readFile, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { JsonRepository } from '../src/main/storage'
@@ -13,6 +19,7 @@ import {
 const TEST_DATA_ROOT = path.resolve(process.cwd(), '.test-data')
 
 const metadata = (title: string): ProjectMetadata => ({
+  // 测试只关心标题差异，其余合法元数据由这个工厂统一提供。
   title,
   author: '佚名',
   dynasty: '先秦',
@@ -25,10 +32,12 @@ describe('JsonRepository', () => {
   let testDirectory: string
 
   beforeEach(() => {
+    // 每个测试使用独立目录，既互不污染，也可并行扩展。
     testDirectory = path.join(TEST_DATA_ROOT, randomUUID())
   })
 
   afterEach(async () => {
+    // 删除前再次做路径边界检查，避免变量错误时误删工作区其他文件。
     const relativePath = path.relative(TEST_DATA_ROOT, testDirectory)
     if (!relativePath || relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
       throw new Error(`拒绝清理测试根目录之外的路径：${testDirectory}`)
@@ -37,6 +46,7 @@ describe('JsonRepository', () => {
   })
 
   async function initializedRepository(): Promise<JsonRepository> {
+    // 多数用例从空而有效的资料库开始，抽出此 helper 减少重复准备代码。
     const repository = new JsonRepository(testDirectory)
     await repository.initialize()
     return repository
@@ -269,7 +279,7 @@ describe('JsonRepository', () => {
     expect((await repository.listProjects()).find((item) => item.id === project.id)?.annotationCount).toBe(0)
   })
 
-  it('按批注类型更新自定义显示样式并持久化部分补丁', async () => {
+  it('按批注类型更新本机全局显示预设，并为所有项目返回相同样式', async () => {
     const repository = await initializedRepository()
     const project = await repository.createProject({
       metadata: metadata('样式测试'),
@@ -299,12 +309,20 @@ describe('JsonRepository', () => {
     expect(updated.styles.definition.italic).toBe(project.styles.definition.italic)
     expect(updated.styles.polysemy).toEqual(previousPolysemy)
 
-    const onDisk = ProjectDocumentSchema.parse(
-      JSON.parse(
-        await readFile(path.join(repository.projectsDirectory, `${project.id}.json`), 'utf8'),
-      ),
+    const libraryOnDisk = LibrarySchema.parse(
+      JSON.parse(await readFile(repository.libraryFile, 'utf8')),
     )
-    expect(onDisk.styles).toEqual(updated.styles)
+    expect(libraryOnDisk.defaultStyles).toEqual(updated.styles)
+
+    const anotherProject = await repository.createProject({
+      metadata: metadata('另一篇文章'),
+      originalText: '温故而知新，可以为师矣。',
+    })
+    expect(anotherProject.styles).toEqual(updated.styles)
+
+    const reopened = new JsonRepository(testDirectory)
+    await reopened.initialize()
+    expect((await reopened.getProject(project.id)).styles).toEqual(updated.styles)
   })
 
   it('在新增、更新和删除批注后持续同步项目摘要计数', async () => {
@@ -360,6 +378,8 @@ describe('JsonRepository', () => {
     })
     const originalBeforeImport = await repository.getProject(project.id)
     const sharePackage = await repository.createSharePackage(project.id, '0.1.0-test')
+    expect(sharePackage).not.toHaveProperty('styles')
+    expect(sharePackage.project).not.toHaveProperty('styles')
     const shareFile = path.join(testDirectory, 'exports', '可分享项目.wyw.json')
 
     await repository.writeShareFile(shareFile, sharePackage)
@@ -388,6 +408,73 @@ describe('JsonRepository', () => {
       ),
     )
     expect(importedOnDisk).toEqual(imported.project)
+  })
+
+  it('首次打开旧版逐项目样式时迁移最近文章为本机全局预设', async () => {
+    const repository = await initializedRepository()
+    const project = await repository.createProject({
+      metadata: metadata('旧版样式文章'),
+      originalText: '敏而好学，不耻下问。',
+    })
+    const projectFile = path.join(repository.projectsDirectory, `${project.id}.json`)
+    const legacyProject = {
+      ...project,
+      styles: {
+        ...project.styles,
+        definition: { ...project.styles.definition, fontColor: '#445566', mark: 'wavy' as const },
+      },
+    }
+    await writeFile(projectFile, `${JSON.stringify(legacyProject, null, 2)}\n`, 'utf8')
+
+    const library = await repository.getLibrary()
+    const { stylePreferencesVersion: _version, ...legacyLibrary } = library
+    await writeFile(repository.libraryFile, `${JSON.stringify(legacyLibrary, null, 2)}\n`, 'utf8')
+
+    const reopened = new JsonRepository(testDirectory)
+    await reopened.initialize()
+
+    const migratedLibrary = await reopened.getLibrary()
+    expect(migratedLibrary.stylePreferencesVersion).toBe(1)
+    expect(migratedLibrary.defaultStyles.definition.fontColor).toBe('#445566')
+    expect((await reopened.getProject(project.id)).styles.definition.mark).toBe('wavy')
+  })
+
+  it('导入分享包时忽略发送者样式，并应用接收者自己的预设', async () => {
+    const sender = new JsonRepository(path.join(testDirectory, 'sender'))
+    const receiver = new JsonRepository(path.join(testDirectory, 'receiver'))
+    await sender.initialize()
+    await receiver.initialize()
+
+    const senderProject = await sender.createProject({
+      metadata: metadata('发送者文章'),
+      originalText: '学而不思则罔，思而不学则殆。',
+    })
+    await sender.createAnnotation(senderProject.id, {
+      type: 'definition',
+      target: { kind: 'character', start: 5, end: 6, text: '罔' },
+      detail: { kind: 'definition', meaning: '迷惑而无所得。' },
+    })
+    await sender.updateStyles(senderProject.id, {
+      definition: { fontColor: '#112233', backgroundColor: '#DBEAFE' },
+    })
+
+    const receiverSeed = await receiver.createProject({
+      metadata: metadata('接收者预设载体'),
+      originalText: '知者不惑。',
+    })
+    const receiverStyles = (await receiver.updateStyles(receiverSeed.id, {
+      definition: { fontColor: '#AA3344', backgroundColor: '#FFE4E6', mark: 'wavy' },
+    })).styles
+
+    const shared = await sender.createSharePackage(senderProject.id, '0.3.0-test')
+    const imported = await receiver.importSharePackage(shared)
+
+    expect(shared).not.toHaveProperty('styles')
+    expect(shared.project).not.toHaveProperty('styles')
+    expect(imported.project.annotations).toHaveLength(1)
+    expect(imported.project.styles).toEqual(receiverStyles)
+    expect(imported.project.styles.definition.fontColor).toBe('#AA3344')
+    expect(imported.project.styles.definition.fontColor).not.toBe('#112233')
   })
 
   it('删除分组时将组内项目自动归入未分组并同步磁盘文件', async () => {

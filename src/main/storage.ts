@@ -1,3 +1,10 @@
+/**
+ * 基于 JSON 文件的后端数据仓库。
+ *
+ * library.json 只保存分组和项目摘要；每篇文章则独立保存在 projects/<UUID>.json。
+ * 所有公开写操作都遵循“校验输入 → 生成新对象 → 原子写盘 → 更新索引”的顺序。
+ * 这个类不依赖 Electron，因此可以直接在 Vitest 的 Node 环境中测试。
+ */
 import { randomUUID } from 'node:crypto'
 import { constants as fsConstants } from 'node:fs'
 import {
@@ -48,8 +55,10 @@ import { AppError, normalizeError } from './errors'
 import { migrateAnnotationsForTextChange } from '../shared/text-migration'
 
 const DEFAULT_GROUP_COLOR = '#64748B'
+// 防止误选特别大的文件后占用过多内存；当前分享包上限为 25 MB。
 const MAX_IMPORT_BYTES = 25 * 1024 * 1024
 
+/** 判断文件是否存在；只有“不存在”返回 false，权限等其他错误仍向上抛出。 */
 async function pathExists(filePath: string): Promise<boolean> {
   try {
     await access(filePath, fsConstants.F_OK)
@@ -62,6 +71,7 @@ async function pathExists(filePath: string): Promise<boolean> {
 }
 
 async function atomicWriteJson(filePath: string, value: unknown): Promise<void> {
+  // 先写同目录临时文件，成功后再 rename 覆盖目标文件，可避免中途崩溃留下半截 JSON。
   await mkdir(path.dirname(filePath), { recursive: true })
   const temporaryPath = path.join(
     path.dirname(filePath),
@@ -71,6 +81,7 @@ async function atomicWriteJson(filePath: string, value: unknown): Promise<void> 
   let handle: Awaited<ReturnType<typeof open>> | undefined
 
   try {
+    // wx 表示只创建新文件；0o600 表示只允许当前用户读写临时文件。
     handle = await open(temporaryPath, 'wx', 0o600)
     await handle.writeFile(contents, 'utf8')
     await handle.sync()
@@ -89,6 +100,7 @@ async function readValidatedJson<T>(
   schema: ZodType<T, ZodTypeDef, unknown>,
   description: string,
 ): Promise<T> {
+  // 磁盘内容先作为 unknown 读取，解析后必须通过对应 Zod Schema 才能返回 T。
   let parsed: unknown
   try {
     parsed = JSON.parse(await readFile(filePath, 'utf8'))
@@ -137,6 +149,7 @@ export class JsonRepository {
   }
 
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {
+    // 把读写串行化，防止两个点击同时改写 library.json 时互相覆盖。
     const result = this.operationQueue.then(operation, operation)
     this.operationQueue = result.then(
       () => undefined,
@@ -146,6 +159,7 @@ export class JsonRepository {
   }
 
   private projectFile(projectId: string): string {
+    // ID 必须是 UUID，既保证数据合法，也阻止通过 ../ 逃离 projects 目录。
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(projectId)) {
       throw new AppError('VALIDATION', '项目 ID 格式不正确')
     }
@@ -153,16 +167,31 @@ export class JsonRepository {
   }
 
   async initialize(): Promise<void> {
+    // 第一次启动创建空资料库；已经存在时只校验，绝不覆盖用户数据。
     return this.enqueue(async () => {
       await mkdir(this.projectsDirectory, { recursive: true })
       if (await pathExists(this.libraryFile)) {
-        await this.readLibraryUnlocked()
+        const library = await this.readLibraryUnlocked()
+        if (library.stylePreferencesVersion !== 1) {
+          // 旧版每篇文章各存一份样式：以最近编辑文章作为用户全局预设，只迁移一次。
+          const latestProject = [...library.projects].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]
+          const defaultStyles = latestProject
+            ? (await this.readProjectUnlocked(latestProject.id)).styles
+            : library.defaultStyles
+          await atomicWriteJson(this.libraryFile, LibrarySchema.parse({
+            ...library,
+            stylePreferencesVersion: 1,
+            defaultStyles,
+            updatedAt: nowIso(),
+          }))
+        }
         return
       }
 
       const now = nowIso()
       const library = LibrarySchema.parse({
         schemaVersion: DATA_SCHEMA_VERSION,
+        stylePreferencesVersion: 1,
         groups: [],
         projects: [],
         defaultStyles: createDefaultAnnotationStyles(),
@@ -184,12 +213,14 @@ export class JsonRepository {
   }
 
   getLibrary(): Promise<Library> {
+    // 返回轻量索引，首页无需一次读入所有文章正文。
     return this.enqueue(() => this.readLibraryUnlocked()).catch((error) => {
       throw normalizeError(error)
     })
   }
 
   listProjects(): Promise<ProjectSummary[]> {
+    // 复制后排序，避免直接修改 library.projects 原数组。
     return this.enqueue(async () => {
       const library = await this.readLibraryUnlocked()
       return [...library.projects].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
@@ -199,18 +230,21 @@ export class JsonRepository {
   }
 
   getProject(projectId: string): Promise<ProjectDocument> {
+    // 先检查索引，再读取独立项目文件；显示样式始终使用本机资料库预设。
     return this.enqueue(async () => {
       const library = await this.readLibraryUnlocked()
       if (!library.projects.some((project) => project.id === projectId)) {
         throw new AppError('NOT_FOUND', '项目不存在')
       }
-      return this.readProjectUnlocked(projectId)
+      const project = await this.readProjectUnlocked(projectId)
+      return ProjectDocumentSchema.parse({ ...project, styles: library.defaultStyles })
     }).catch((error) => {
       throw normalizeError(error)
     })
   }
 
   createProject(input: CreateProjectInput): Promise<ProjectDocument> {
+    // 创建项目时同时产生项目文件和 library.json 摘要，两者必须保持一致。
     return this.enqueue(async () => {
       const validatedInput = CreateProjectInputSchema.parse(input)
       const library = await this.readLibraryUnlocked()
@@ -218,6 +252,7 @@ export class JsonRepository {
       this.assertGroupExists(library, groupId)
 
       let projectId = randomUUID()
+      // UUID 冲突概率极低，但仍显式检查索引和磁盘，保证不会覆盖已有项目。
       while (library.projects.some((project) => project.id === projectId) || (await pathExists(this.projectFile(projectId)))) {
         projectId = randomUUID()
       }
@@ -248,6 +283,7 @@ export class JsonRepository {
   }
 
   updateProject(projectId: string, patch: UpdateProjectInput): Promise<ProjectDocument> {
+    // patch 只含发生变化的字段；原文改变时还要迁移所有批注坐标。
     return this.enqueue(async () => {
       const validatedPatch = UpdateProjectInputSchema.parse(patch)
       const library = await this.readLibraryUnlocked()
@@ -265,6 +301,8 @@ export class JsonRepository {
         originalText,
         annotations,
         groupId,
+        // 项目文件中的旧样式仅用于兼容，当前本机预设始终覆盖它。
+        styles: library.defaultStyles,
         updatedAt: now,
       })
 
@@ -276,6 +314,7 @@ export class JsonRepository {
   }
 
   deleteProject(projectId: string): Promise<{ id: string }> {
+    // 先把项目文件改名为墓碑文件；若索引写入失败，还可以恢复原文件。
     return this.enqueue(async () => {
       const library = await this.readLibraryUnlocked()
       await this.requireProjectUnlocked(library, projectId)
@@ -302,6 +341,7 @@ export class JsonRepository {
   }
 
   createGroup(input: CreateGroupInput): Promise<ProjectGroup> {
+    // 分组只存在于 library.json，名称比较时忽略首尾空格和大小写差异。
     return this.enqueue(async () => {
       const validatedInput = CreateGroupInputSchema.parse(input)
       const library = await this.readLibraryUnlocked()
@@ -332,6 +372,7 @@ export class JsonRepository {
   }
 
   updateGroup(groupId: string, patch: UpdateGroupInput): Promise<ProjectGroup> {
+    // 新名称不能与其他分组重名，但允许分组继续使用自己的旧名称。
     return this.enqueue(async () => {
       const validatedPatch = UpdateGroupInputSchema.parse(patch)
       const library = await this.readLibraryUnlocked()
@@ -364,6 +405,7 @@ export class JsonRepository {
   }
 
   deleteGroup(groupId: string): Promise<{ id: string; reassignedProjectIds: string[] }> {
+    // 删除分组不删除文章，而是把该组所有项目的 groupId 改为 null。
     return this.enqueue(async () => {
       const library = await this.readLibraryUnlocked()
       if (!library.groups.some((group) => group.id === groupId)) {
@@ -382,6 +424,7 @@ export class JsonRepository {
 
       const written: number[] = []
       try {
+        // 多个项目逐个写盘，并记录完成位置；失败时用 previousProjects 回滚。
         for (let index = 0; index < updatedProjects.length; index += 1) {
           await atomicWriteJson(this.projectFile(updatedProjects[index].id), updatedProjects[index])
           written.push(index)
@@ -409,6 +452,7 @@ export class JsonRepository {
   }
 
   createAnnotation(projectId: string, input: CreateAnnotationInput): Promise<Annotation> {
+    // 除 Zod 结构校验外，还要执行“字/词/句允许哪些批注类型”的业务校验。
     return this.enqueue(async () => {
       const validatedInput = CreateAnnotationInputSchema.parse(input)
       const library = await this.readLibraryUnlocked()
@@ -441,6 +485,7 @@ export class JsonRepository {
     annotationId: string,
     patch: UpdateAnnotationInput,
   ): Promise<Annotation> {
+    // 用旧批注加 patch 组成完整新批注，再整体校验，避免产生半合法状态。
     return this.enqueue(async () => {
       const validatedPatch = UpdateAnnotationInputSchema.parse(patch)
       const library = await this.readLibraryUnlocked()
@@ -465,6 +510,7 @@ export class JsonRepository {
   }
 
   deleteAnnotation(projectId: string, annotationId: string): Promise<{ id: string }> {
+    // filter 创建新数组，找不到 ID 时明确返回 NOT_FOUND。
     return this.enqueue(async () => {
       const library = await this.readLibraryUnlocked()
       const previous = await this.requireProjectUnlocked(library, projectId)
@@ -484,27 +530,34 @@ export class JsonRepository {
   }
 
   updateStyles(projectId: string, patch: AnnotationStylesPatch): Promise<ProjectDocument> {
+    // 样式属于本机用户：更新 library.defaultStyles，而不是某一篇文章的分享内容。
     return this.enqueue(async () => {
       const validatedPatch = AnnotationStylesPatchSchema.parse(patch)
       const library = await this.readLibraryUnlocked()
-      const previous = await this.requireProjectUnlocked(library, projectId)
-      const styles = { ...previous.styles }
+      const project = await this.requireProjectUnlocked(library, projectId)
+      const styles = { ...library.defaultStyles }
       for (const type of Object.keys(validatedPatch) as Array<keyof AnnotationStylesPatch>) {
         const stylePatch = validatedPatch[type]
         if (stylePatch) styles[type] = { ...styles[type], ...stylePatch }
       }
-      const project = ProjectDocumentSchema.parse({ ...previous, styles, updatedAt: nowIso() })
-      await this.persistUpdatedProject(previous, project, library)
-      return project
+      const nextLibrary = LibrarySchema.parse({
+        ...library,
+        defaultStyles: styles,
+        updatedAt: nowIso(),
+      })
+      await atomicWriteJson(this.libraryFile, nextLibrary)
+      return ProjectDocumentSchema.parse({ ...project, styles })
     }).catch((error) => {
       throw normalizeError(error)
     })
   }
 
   createSharePackage(projectId: string, appVersion: string): Promise<SharePackage> {
+    // 导出包携带文章和批注，但主动剥离本机显示样式。
     return this.enqueue(async () => {
       const library = await this.readLibraryUnlocked()
       const project = await this.requireProjectUnlocked(library, projectId)
+      const { styles: _localStyles, ...sharedProject } = project
       const group = project.groupId
         ? (library.groups.find((candidate) => candidate.id === project.groupId) ?? null)
         : null
@@ -513,9 +566,8 @@ export class JsonRepository {
         formatVersion: SHARE_FORMAT_VERSION,
         appVersion,
         exportedAt: nowIso(),
-        project,
+        project: sharedProject,
         group,
-        styles: project.styles,
       })
     }).catch((error) => {
       throw normalizeError(error)
@@ -523,6 +575,7 @@ export class JsonRepository {
   }
 
   importSharePackage(value: unknown): Promise<ImportResult> {
+    // 导入内容一律视为不可信 unknown，必须先通过 SharePackageSchema。
     return this.enqueue(async () => {
       const sharePackage = SharePackageSchema.parse(value)
       sharePackage.project.annotations.forEach((annotation) => {
@@ -535,6 +588,7 @@ export class JsonRepository {
       let groups = [...library.groups]
 
       if (sharePackage.group) {
+        // 同名分组直接复用；ID 冲突但名称不同则生成新 ID。
         const sameName = groups.find(
           (group) => normalizeName(group.name) === normalizeName(sharePackage.group!.name),
         )
@@ -560,6 +614,7 @@ export class JsonRepository {
 
       const originalProjectId = sharePackage.project.id
       let projectId = originalProjectId
+      // 同 ID 项目不覆盖，改用新 UUID 保存为安全副本。
       while (library.projects.some((project) => project.id === projectId) || (await pathExists(this.projectFile(projectId)))) {
         projectId = randomUUID()
       }
@@ -567,7 +622,8 @@ export class JsonRepository {
         ...sharePackage.project,
         id: projectId,
         groupId,
-        styles: sharePackage.styles,
+        // 接收者看到的颜色、字体和标记完全由自己的资料库预设决定。
+        styles: library.defaultStyles,
         updatedAt: now,
       })
       const nextLibrary = LibrarySchema.parse({
@@ -584,6 +640,7 @@ export class JsonRepository {
   }
 
   async readShareFile(filePath: string): Promise<unknown> {
+    // 此处只负责大小限制和 JSON 解析，具体字段由 importSharePackage 校验。
     try {
       const fileStat = await stat(filePath)
       if (!fileStat.isFile()) throw new AppError('VALIDATION', '选中的路径不是文件')
@@ -597,6 +654,7 @@ export class JsonRepository {
   }
 
   async writeShareFile(filePath: string, sharePackage: SharePackage): Promise<void> {
+    // 即使数据来自内部也再次校验，避免导出损坏的分享包。
     try {
       const validatedPackage = SharePackageSchema.parse(sharePackage)
       await atomicWriteJson(filePath, validatedPackage)
@@ -628,6 +686,7 @@ export class JsonRepository {
   }
 
   private async writeNewProjectAndLibrary(project: ProjectDocument, library: Library): Promise<void> {
+    // 项目文件成功但索引失败时删除新项目，防止留下不可见的孤立文件。
     const filePath = this.projectFile(project.id)
     if (await pathExists(filePath)) throw new AppError('CONFLICT', '项目 ID 已存在')
     await atomicWriteJson(filePath, project)
@@ -644,6 +703,7 @@ export class JsonRepository {
     project: ProjectDocument,
     library: Library,
   ): Promise<void> {
+    // 项目写入成功但索引写入失败时恢复 previous，保证两个文件看到同一版本。
     const index = library.projects.findIndex((summary) => summary.id === project.id)
     if (index < 0) throw new AppError('NOT_FOUND', '项目不存在')
     const projects = [...library.projects]

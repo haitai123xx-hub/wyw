@@ -1,4 +1,8 @@
-import { useMemo, useRef, useState, type CSSProperties } from 'react';
+/**
+ * 中央正文阅读区：显示文章、捕获文字选区，并把批注转换成正文样式和行间文字。
+ * 它不直接保存数据，只通过 props 回调把选区和点击事件通知 App。
+ */
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { annotationDetailLines, annotationInlineText, annotationSummary } from '@shared/annotation-display';
 import { ANNOTATION_TYPES, annotationTypeMeta } from '../constants';
 import { CloseIcon, EditIcon, ExportIcon, InfoIcon, NoteIcon, StyleIcon } from '../icons';
@@ -19,17 +23,29 @@ interface DocumentViewProps {
 interface Segment { start: number; end: number; text: string; annotations: Annotation[] }
 interface NotePopup { annotations: Annotation[]; x: number; y: number }
 interface ReaderSettings { fontFamily: string; fontSize: number; lineHeight: number; width: number; align: 'left' | 'justify' }
+type ExpandedPreferences = Record<string, string[]>;
 
 const DEFAULT_READER_SETTINGS: ReaderSettings = { fontFamily: 'Songti SC, SimSun, STSong, serif', fontSize: 18, lineHeight: 3.4, width: 760, align: 'justify' };
 
 function readReaderSettings(): ReaderSettings {
+  // 排版是本机阅读偏好；旧设置的行高过小时提高到 2.8，给行间批注留空间。
   try { const value = { ...DEFAULT_READER_SETTINGS, ...JSON.parse(localStorage.getItem('mojian-reader-settings') ?? '{}') }; return { ...value, lineHeight: Math.max(2.8, value.lineHeight) }; }
   catch { return DEFAULT_READER_SETTINGS; }
+}
+
+function readExpandedPreferences(): ExpandedPreferences {
+  try {
+    const value = JSON.parse(localStorage.getItem('mojian-expanded-annotations') ?? '{}');
+    return value && typeof value === 'object' ? value as ExpandedPreferences : {};
+  } catch {
+    return {};
+  }
 }
 
 const KIND_PRIORITY = { sentence: 1, word: 2, character: 3 } as const;
 
 function makeSegments(project: Project): Segment[] {
+  // 用所有批注起止坐标切割原文，使每个片段拥有一组恒定的重叠批注。
   const valid = project.annotations.filter((annotation) => annotation.target.status !== 'needs-review' && annotation.target.start >= 0 && annotation.target.end > annotation.target.start && annotation.target.end <= project.originalText.length);
   const boundaries = new Set([0, project.originalText.length]);
   valid.forEach((annotation) => { boundaries.add(annotation.target.start); boundaries.add(annotation.target.end); });
@@ -41,6 +57,7 @@ function makeSegments(project: Project): Segment[] {
 }
 
 function choosePrimary(annotations: Annotation[], styles: Project['styles']): Annotation | undefined {
+  // 重叠时先选择更精确的“字 > 词 > 句”，同粒度再比较用户设置的优先级。
   return [...annotations].sort((a, b) => {
     const kindDifference = KIND_PRIORITY[b.target.kind] - KIND_PRIORITY[a.target.kind];
     return kindDifference || styles[b.type].priority - styles[a.type].priority;
@@ -53,11 +70,13 @@ function withAlpha(color: string, opacity: number) {
 }
 
 function segmentStyle(annotation: Annotation | undefined, annotations: Annotation[], styles: Project['styles']): React.CSSProperties | undefined {
+  // 把持久化的 AnnotationStyle 转换成 React 能写到 span.style 的 CSS 属性。
   if (!annotation) return undefined;
   const style: AnnotationStyle = styles[annotation.type];
   const mark = style.mark;
   const underline = style.underline || ['underline', 'dashed', 'wavy', 'combined'].includes(mark);
   const colors = annotations.slice(0, 3).map((item) => styles[item.type].fontColor);
+  // 同一区间有多条批注时，用最多三种颜色组成底部渐变提示重叠。
   const stops = colors.map((color, index) => `${color} ${(index / colors.length) * 100}% ${((index + 1) / colors.length) * 100}%`).join(',');
   return {
     color: ['color', 'combined'].includes(mark) ? style.fontColor : undefined,
@@ -82,6 +101,7 @@ function segmentStyle(annotation: Annotation | undefined, annotations: Annotatio
 }
 
 function inlineNoteData(segment: Segment, annotations: Annotation[], styles: Project['styles']) {
+  // 上方文字只挂在批注的首段，下方文字只挂在末段，避免跨片段批注被重复显示。
   const above = annotations.filter((annotation) => styles[annotation.type].notePosition === 'above' && annotation.target.start === segment.start);
   const below = annotations.filter((annotation) => styles[annotation.type].notePosition === 'below' && annotation.target.end === segment.end);
   const aboveStyle = above.length ? styles[choosePrimary(above, styles)!.type] : undefined;
@@ -90,6 +110,7 @@ function inlineNoteData(segment: Segment, annotations: Annotation[], styles: Pro
     aboveText: above.map(annotationInlineText).join(' ｜ '),
     belowText: below.map(annotationInlineText).join(' ｜ '),
     variables: {
+      // CSS 伪元素从 data-note-* 读取文字，从这些变量读取字体样式。
       '--note-above-color': aboveStyle?.fontColor,
       '--note-above-size': aboveStyle ? `${aboveStyle.noteFontSize}px` : undefined,
       '--note-above-font': aboveStyle?.fontFamily,
@@ -100,16 +121,18 @@ function inlineNoteData(segment: Segment, annotations: Annotation[], styles: Pro
   };
 }
 
-function paragraphGroups(project: Project, visible: Set<AnnotationType>) {
+function paragraphGroups(project: Project, visible: Set<AnnotationType>, expanded: Set<string>) {
+  // 展开模式按空行划分自然段，再把每条批注归入其起点所在段落。
   const ranges: Array<{ start: number; end: number; index: number }> = [];
   let start = 0;
   const matches = [...project.originalText.matchAll(/\n\s*\n/g)];
   matches.forEach((match, index) => { ranges.push({ start, end: match.index ?? start, index: index + 1 }); start = (match.index ?? start) + match[0].length; });
   ranges.push({ start, end: project.originalText.length, index: ranges.length + 1 });
-  return ranges.map((range) => ({ ...range, annotations: project.annotations.filter((annotation) => visible.has(annotation.type) && annotation.target.start >= range.start && annotation.target.start < range.end).sort((a, b) => a.target.start - b.target.start) })).filter((group) => group.annotations.length);
+  return ranges.map((range) => ({ ...range, annotations: project.annotations.filter((annotation) => expanded.has(annotation.id) && visible.has(annotation.type) && annotation.target.start >= range.start && annotation.target.start < range.end).sort((a, b) => a.target.start - b.target.start) })).filter((group) => group.annotations.length);
 }
 
 export function DocumentView({ project, activeAnnotationId, selection, onSelectText, onAnnotationClick, onEditProject, onExportProject }: DocumentViewProps) {
+  // ref 保存真实 DOM 节点，选区坐标和浮层位置需要读取浏览器 DOM API。
   const paneRef = useRef<HTMLElement>(null);
   const textRef = useRef<HTMLDivElement>(null);
   const [legendVisible, setLegendVisible] = useState(true);
@@ -118,20 +141,54 @@ export function DocumentView({ project, activeAnnotationId, selection, onSelectT
   const [popup, setPopup] = useState<NotePopup | null>(null);
   const [readerSettingsOpen, setReaderSettingsOpen] = useState(false);
   const [readerSettings, setReaderSettings] = useState<ReaderSettings>(readReaderSettings);
+  const [expandedByProject, setExpandedByProject] = useState<ExpandedPreferences>(readExpandedPreferences);
+  const expandedAnnotationIds = useMemo(() => new Set(expandedByProject[project.id] ?? []), [expandedByProject, project.id]);
+  // useMemo 只在依赖变化时重新执行较重的切段、分组和计数计算。
   const segments = useMemo(() => makeSegments(project), [project]);
   const visibleTypes = useMemo(() => new Set(ANNOTATION_TYPES.filter((item) => project.styles[item.id].visible && !hiddenTypes.has(item.id)).map((item) => item.id)), [hiddenTypes, project.styles]);
-  const expandedGroups = useMemo(() => paragraphGroups(project, visibleTypes), [project, visibleTypes]);
+  const selectableAnnotations = useMemo(() => project.annotations.filter((annotation) => visibleTypes.has(annotation.type)), [project.annotations, visibleTypes]);
+  const expandedVisibleCount = useMemo(() => selectableAnnotations.filter((annotation) => expandedAnnotationIds.has(annotation.id)).length, [expandedAnnotationIds, selectableAnnotations]);
+  const expandedGroups = useMemo(() => paragraphGroups(project, visibleTypes, expandedAnnotationIds), [expandedAnnotationIds, project, visibleTypes]);
   const counts = useMemo(() => {
     const result = Object.fromEntries(ANNOTATION_TYPES.map((type) => [type.id, 0])) as Record<string, number>;
     project.annotations.forEach((annotation) => { result[annotation.type] += 1; });
     return result;
   }, [project.annotations]);
 
+  useEffect(() => {
+    localStorage.setItem('mojian-expanded-annotations', JSON.stringify(expandedByProject));
+  }, [expandedByProject]);
+
+  useEffect(() => {
+    const validIds = new Set(project.annotations.map((annotation) => annotation.id));
+    setExpandedByProject((current) => {
+      const previous = current[project.id] ?? [];
+      const next = previous.filter((id) => validIds.has(id));
+      return next.length === previous.length ? current : { ...current, [project.id]: next };
+    });
+  }, [project.annotations, project.id]);
+
   const changeMode = (next: ReadingMode) => { setMode(next); setPopup(null); localStorage.setItem('mojian-reading-mode', next); };
   const toggleType = (type: AnnotationType) => setHiddenTypes((current) => { const next = new Set(current); if (next.has(type)) next.delete(type); else next.add(type); return next; });
   const updateReaderSettings = (patch: Partial<ReaderSettings>) => setReaderSettings((current) => { const next = { ...current, ...patch }; localStorage.setItem('mojian-reader-settings', JSON.stringify(next)); return next; });
+  const setAnnotationExpanded = (id: string, expanded: boolean, reveal = false) => {
+    setExpandedByProject((current) => {
+      const nextIds = new Set(current[project.id] ?? []);
+      if (expanded) nextIds.add(id);
+      else nextIds.delete(id);
+      return { ...current, [project.id]: [...nextIds] };
+    });
+    if (expanded && reveal) changeMode('expanded');
+  };
+  const setAllExpanded = (expanded: boolean) => {
+    setExpandedByProject((current) => ({
+      ...current,
+      [project.id]: expanded ? selectableAnnotations.map((annotation) => annotation.id) : [],
+    }));
+  };
 
   const captureSelection = () => {
+    // 浏览器 Selection 给出 DOM 节点坐标；两个临时 Range 把它换算成纯文本字符下标。
     const root = textRef.current;
     const browserSelection = window.getSelection();
     if (!root || !browserSelection || browserSelection.isCollapsed || browserSelection.rangeCount === 0) return;
@@ -143,10 +200,12 @@ export function DocumentView({ project, activeAnnotationId, selection, onSelectT
     if (start > end) [start, end] = [end, start];
     while (start < end && /\s/.test(project.originalText[start])) start += 1;
     while (end > start && /\s/.test(project.originalText[end - 1])) end -= 1;
+    // 保存的 text 始终重新从 originalText 切片，避免把 CSS 伪元素批注混入原文。
     if (end > start) onSelectText({ start, end, text: project.originalText.slice(start, end) });
   };
 
   const showAnnotations = (event: React.MouseEvent, annotations: Annotation[]) => {
+    // 弹卡位置相对正文面板计算，并限制在面板边界内。
     if (!window.getSelection()?.isCollapsed || mode === 'clean') return;
     event.stopPropagation();
     const pane = paneRef.current?.getBoundingClientRect();
@@ -182,16 +241,25 @@ export function DocumentView({ project, activeAnnotationId, selection, onSelectT
           const primary = choosePrimary(annotations, project.styles);
           if (!primary) return <span key={`${segment.start}-${segment.end}`}>{segment.text}</span>;
           const labels = annotations.map((annotation) => `${annotationTypeMeta(annotation.type).label}：${annotationSummary(annotation)}`).join('\n');
-          const inlineNotes = inlineNoteData(segment, annotations, project.styles);
-          return <span key={`${segment.start}-${segment.end}`} className={`annotated-text ${annotations.some((item) => item.id === activeAnnotationId) ? 'is-active' : ''} ${annotations.length > 1 ? 'is-stacked' : ''} ${inlineNotes.aboveText || inlineNotes.belowText ? 'has-inline-note' : ''}`} style={{ ...segmentStyle(primary, annotations, project.styles), ...inlineNotes.variables }} data-note-above={inlineNotes.aboveText || undefined} data-note-below={inlineNotes.belowText || undefined} title={labels} onClick={(event) => showAnnotations(event, annotations)}>{segment.text}</span>;
+          // “展开”模式只在原文行间显示用户选中的批注，其余批注仍保留颜色标记。
+          const noteAnnotations = mode === 'expanded' ? annotations.filter((annotation) => expandedAnnotationIds.has(annotation.id)) : annotations;
+          const inlineNotes = inlineNoteData(segment, noteAnnotations, project.styles);
+          const hasInlineNote = Boolean(inlineNotes.aboveText || inlineNotes.belowText);
+          return <span key={`${segment.start}-${segment.end}`} className={`annotation-layout note-${primary.target.kind} ${hasInlineNote ? 'has-inline-note' : ''}`} style={inlineNotes.variables} data-note-above={inlineNotes.aboveText || undefined} data-note-below={inlineNotes.belowText || undefined}><span className={`annotated-text ${annotations.some((item) => item.id === activeAnnotationId) ? 'is-active' : ''} ${annotations.length > 1 ? 'is-stacked' : ''}`} style={segmentStyle(primary, annotations, project.styles)} title={labels} onClick={(event) => showAnnotations(event, annotations)}>{segment.text}</span></span>;
         })}
       </div>
-      {mode === 'expanded' && <section className="expanded-annotations"><header><NoteIcon size={16} /><span>逐段批注</span></header>{expandedGroups.map((group) => <div className="expanded-group" key={group.index}><b>第 {group.index} 段</b><div>{group.annotations.map((annotation) => <button key={annotation.id} onClick={(event) => { event.stopPropagation(); onAnnotationClick(annotation); }}><span style={{ color: project.styles[annotation.type].fontColor }}>{annotationTypeMeta(annotation.type).label}</span><strong>“{annotation.target.text}”</strong><p>{annotationDetailLines(annotation.detail).map((line) => <span key={line}>{line}</span>)}</p>{annotation.note && <small>{annotation.note}</small>}</button>)}</div></div>)}</section>}
+      {mode === 'expanded' && <section className="expanded-annotations">
+        <header><NoteIcon size={16} /><span>自由展开批注</span><small>已展开 {expandedVisibleCount} 条；选中内容同时显示在原文行间</small><div><button onClick={(event) => { event.stopPropagation(); setAllExpanded(true); }}>全部展开</button><button onClick={(event) => { event.stopPropagation(); setAllExpanded(false); }}>全部收起</button></div></header>
+        <div className="expanded-picker">
+          {selectableAnnotations.map((annotation) => <button key={annotation.id} className={expandedAnnotationIds.has(annotation.id) ? 'active' : ''} onClick={(event) => { event.stopPropagation(); setAnnotationExpanded(annotation.id, !expandedAnnotationIds.has(annotation.id)); }}><i style={{ background: project.styles[annotation.type].fontColor }} /><span>{annotationTypeMeta(annotation.type).label}</span><strong>“{annotation.target.text}”</strong></button>)}
+        </div>
+        {expandedGroups.length ? expandedGroups.map((group) => <div className="expanded-group" key={group.index}><b>第 {group.index} 段</b><div>{group.annotations.map((annotation) => <button key={annotation.id} onClick={(event) => { event.stopPropagation(); onAnnotationClick(annotation); }}><span style={{ color: project.styles[annotation.type].fontColor }}>{annotationTypeMeta(annotation.type).label}</span><strong>“{annotation.target.text}”</strong><p>{annotationDetailLines(annotation.detail).map((line) => <span key={line}>{line}</span>)}</p>{annotation.note && <small>{annotation.note}</small>}</button>)}</div></div>) : <div className="expanded-empty">点击上方批注，选择要展开查看的内容</div>}
+      </section>}
       {project.metadata.description && <aside className="article-description"><InfoIcon size={16} /><p>{project.metadata.description}</p></aside>}
       <footer className="article-footer"><span>全文 {project.originalText.replace(/\s/g, '').length} 字</span><span className="footer-seal">笺</span><span>{project.annotations.length} 条批注</span></footer>
     </article></div></div>
 
-    {popup && <aside className="inline-note-card" style={{ left: popup.x, top: popup.y }} onClick={(event) => event.stopPropagation()}><header><div><span>原文批注</span><strong>“{popup.annotations[0]?.target.text}”</strong></div><button onClick={() => setPopup(null)}><CloseIcon size={15} /></button></header><div className="inline-note-list">{popup.annotations.map((annotation) => <section key={annotation.id}><div><b style={{ color: project.styles[annotation.type].fontColor, background: withAlpha(project.styles[annotation.type].backgroundColor, 28) }}>{annotationTypeMeta(annotation.type).label}</b><button onClick={() => { onAnnotationClick(annotation); setPopup(null); }}><EditIcon size={13} />编辑</button></div>{annotationDetailLines(annotation.detail).map((line) => <p key={line}>{line}</p>)}{annotation.note && <small>{annotation.note}</small>}</section>)}</div></aside>}
+    {popup && <aside className="inline-note-card" style={{ left: popup.x, top: popup.y }} onClick={(event) => event.stopPropagation()}><header><div><span>原文批注</span><strong>“{popup.annotations[0]?.target.text}”</strong></div><button onClick={() => setPopup(null)}><CloseIcon size={15} /></button></header><div className="inline-note-list">{popup.annotations.map((annotation) => <section key={annotation.id}><div><b style={{ color: project.styles[annotation.type].fontColor, background: withAlpha(project.styles[annotation.type].backgroundColor, 28) }}>{annotationTypeMeta(annotation.type).label}</b><span className="inline-note-actions"><button onClick={() => setAnnotationExpanded(annotation.id, !expandedAnnotationIds.has(annotation.id), !expandedAnnotationIds.has(annotation.id))}>{expandedAnnotationIds.has(annotation.id) ? '收起' : '展开'}</button><button onClick={() => { onAnnotationClick(annotation); setPopup(null); }}><EditIcon size={13} />编辑</button></span></div>{annotationDetailLines(annotation.detail).map((line) => <p key={line}>{line}</p>)}{annotation.note && <small>{annotation.note}</small>}</section>)}</div></aside>}
 
     {mode !== 'clean' && (legendVisible ? <section className="annotation-legend" onClick={(event) => event.stopPropagation()}><div className="legend-title"><NoteIcon size={15} /><span>批注图例</span><small>点击类型可临时隐藏</small><button onClick={() => setLegendVisible(false)} title="隐藏图例"><CloseIcon size={14} /></button></div><div className="legend-items">{ANNOTATION_TYPES.map((type) => <button key={type.id} className={`${counts[type.id] ? 'has-notes' : ''} ${hiddenTypes.has(type.id) ? 'is-hidden' : ''}`} onClick={() => toggleType(type.id)}><i style={{ background: project.styles[type.id].backgroundColor, borderColor: project.styles[type.id].fontColor }} />{type.label}<b>{hiddenTypes.has(type.id) ? '×' : counts[type.id] || ''}</b></button>)}</div></section> : <button className="legend-toggle" onClick={(event) => { event.stopPropagation(); setLegendVisible(true); }}><NoteIcon size={15} />图例</button>)}
   </main>;

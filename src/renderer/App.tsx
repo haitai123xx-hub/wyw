@@ -1,3 +1,9 @@
+/**
+ * React 应用的总协调组件。
+ *
+ * App 保存当前资料库、项目、选区和弹窗等共享状态；子组件负责显示，并通过回调
+ * 把用户操作传回 App。真正的持久化仍由 notesRepository 完成。
+ */
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import { notesRepository } from './api';
 import { DEFAULT_STYLES, SAMPLE_TEXT } from './constants';
@@ -15,6 +21,7 @@ type Confirmation =
   | null;
 
 function readStoredNumber(key: string, fallback: number, minimum: number, maximum: number) {
+  // localStorage 是字符串存储；读取后转换为数字并限制在安全范围内。
   const value = Number(localStorage.getItem(key));
   return Number.isFinite(value) ? Math.min(maximum, Math.max(minimum, value)) : fallback;
 }
@@ -24,6 +31,7 @@ function readStoredVisibility(key: string) {
 }
 
 function ensureProject(project: Project): Project {
+  // 为可能缺少新字段的数据补默认值，让组件只处理稳定的完整结构。
   return {
     ...project,
     metadata: {
@@ -44,28 +52,33 @@ function ensureProject(project: Project): Project {
 }
 
 export default function App() {
-  const [library, setLibrary] = useState<Library>({ schemaVersion: 2, projects: [], groups: [], defaultStyles: DEFAULT_STYLES, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+  // 数据状态：library 用于左侧摘要列表，project 是当前打开的完整文章。
+  const [library, setLibrary] = useState<Library>({ schemaVersion: 2, stylePreferencesVersion: 1, projects: [], groups: [], defaultStyles: DEFAULT_STYLES, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [project, setProject] = useState<Project | null>(null);
   const [activeGroup, setActiveGroup] = useState<GroupFilter>('all');
+  // 交互状态：正文选区、正在编辑的批注以及重新定位中的批注。
   const [selection, setSelection] = useState<TextSelection | null>(null);
   const [activeAnnotationId, setActiveAnnotationId] = useState<string | null>(null);
   const [relinkAnnotationId, setRelinkAnnotationId] = useState<string | null>(null);
   const [loadingLibrary, setLoadingLibrary] = useState(true);
   const [loadingProject, setLoadingProject] = useState(false);
   const [fatalError, setFatalError] = useState('');
+  // 弹窗和临时反馈状态不会写入项目 JSON。
   const [projectModalOpen, setProjectModalOpen] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [groupModalOpen, setGroupModalOpen] = useState(false);
   const [editingGroup, setEditingGroup] = useState<Group | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation>(null);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  // 布局偏好只属于本机，通过 localStorage 记忆，不跟随项目导出。
   const [sidebarVisible, setSidebarVisible] = useState(() => readStoredVisibility('mojian-sidebar-visible'));
   const [inspectorVisible, setInspectorVisible] = useState(() => readStoredVisibility('mojian-inspector-visible'));
   const [sidebarWidth, setSidebarWidth] = useState(() => readStoredNumber('mojian-sidebar-width', 278, 220, 420));
   const [inspectorWidth, setInspectorWidth] = useState(() => readStoredNumber('mojian-inspector-width', 354, 300, 520));
 
   const toast = useCallback((message: string, tone: ToastMessage['tone'] = 'success') => {
+    // 使用函数式 setState，确保连续出现多条提示时不会丢失前一条。
     const id = Date.now() + Math.floor(Math.random() * 1000);
     setToasts((items) => [...items, { id, message, tone }]);
     window.setTimeout(() => setToasts((items) => items.filter((item) => item.id !== id)), 3200);
@@ -78,6 +91,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    // 依赖数组中的任意布局值改变后，立即保存本机偏好。
     localStorage.setItem('mojian-sidebar-visible', String(sidebarVisible));
     localStorage.setItem('mojian-inspector-visible', String(inspectorVisible));
     localStorage.setItem('mojian-sidebar-width', String(sidebarWidth));
@@ -85,6 +99,7 @@ export default function App() {
   }, [inspectorVisible, inspectorWidth, sidebarVisible, sidebarWidth]);
 
   const startResize = useCallback((side: 'sidebar' | 'inspector', event: ReactPointerEvent<HTMLDivElement>) => {
+    // pointermove 挂到 window，即使鼠标离开窄分隔条也能继续拖动。
     event.preventDefault();
     const startX = event.clientX;
     const startWidth = side === 'sidebar' ? sidebarWidth : inspectorWidth;
@@ -101,6 +116,7 @@ export default function App() {
       else setInspectorWidth(nextWidth);
     };
     const onEnd = () => {
+      // 拖动结束必须移除所有全局监听，避免以后每次移动鼠标仍触发旧函数。
       document.body.classList.remove('is-resizing-pane');
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onEnd);
@@ -114,6 +130,7 @@ export default function App() {
   }, [inspectorVisible, inspectorWidth, sidebarVisible, sidebarWidth]);
 
   useEffect(() => {
+    // 首次挂载时只加载一次资料库，并优先恢复上次打开的项目。
     let alive = true;
     void (async () => {
       try {
@@ -133,10 +150,12 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    // selectedProjectId 改变时异步读取完整项目，同时清空属于旧项目的临时选区。
     if (!selectedProjectId) {
       setProject(null);
       return;
     }
+    // cleanup 会把 alive 设为 false，防止较慢的旧请求覆盖后来选择的新项目。
     let alive = true;
     setLoadingProject(true);
     setProject(null);
@@ -154,11 +173,13 @@ export default function App() {
   const activeAnnotation = useMemo(() => project?.annotations.find((item) => item.id === activeAnnotationId) ?? null, [activeAnnotationId, project]);
 
   const applyProject = useCallback((next: Project) => {
+    // 写操作返回新项目后更新正文，同时刷新左侧摘要中的时间和批注数。
     setProject(ensureProject(next));
     void refreshLibrary().catch(() => undefined);
   }, [refreshLibrary]);
 
   const createProject = async (input: ProjectCreateInput) => {
+    // await 保证创建、刷新列表、选中新项目按顺序完成。
     const created = await notesRepository.createProject(input);
     await refreshLibrary();
     setSelectedProjectId(created.id);
@@ -179,6 +200,7 @@ export default function App() {
     setActiveAnnotationId(null);
     setRelinkAnnotationId(null);
     const reviewCount = updated.annotations.filter((annotation) => annotation.target.status === 'needs-review').length;
+    // 原文修改区与旧批注相交时，提醒用户这些批注需要重新选位置。
     toast(reviewCount ? `篇目已保存，${reviewCount} 条批注需要重新定位` : '篇目设置已保存', reviewCount ? 'info' : 'success');
   };
 
@@ -215,6 +237,7 @@ export default function App() {
   };
 
   const createSample = async () => {
+    // 示例先创建文章，再用正常仓库接口添加四种批注，因此也验证了完整数据流程。
     try {
       const created = await notesRepository.createProject({
         metadata: { title: '桃花源记', author: '陶渊明', dynasty: '东晋', source: '示例篇目', description: '这是一篇内置示例。拖动选择原文，即可开始添加批注。', tags: ['示例', '古文'] },
@@ -251,6 +274,7 @@ export default function App() {
   };
 
   const clearSelection = () => {
+    // React 状态与浏览器原生 Selection 是两套数据，两边都要清空。
     setSelection(null);
     setActiveAnnotationId(null);
     setRelinkAnnotationId(null);
@@ -261,6 +285,7 @@ export default function App() {
     if (!project) return;
     try {
       const updated = await notesRepository.createAnnotation(project.id, input);
+      // 仓库返回包含新批注的完整项目，交给 applyProject 统一更新。
       applyProject(updated);
       setActiveAnnotationId(null);
       setRelinkAnnotationId(null);
@@ -305,7 +330,7 @@ export default function App() {
     try {
       const updated = await notesRepository.updateStyles(project.id, { [type]: style });
       applyProject(updated);
-      toast(`「${type === 'definition' ? '释义' : '批注'}」样式已应用`);
+      toast(`「${type === 'definition' ? '释义' : '批注'}」已保存为本机显示预设`);
     } catch (reason) {
       toast(reason instanceof Error ? reason.message : '样式保存失败', 'error');
       throw reason;
@@ -320,6 +345,7 @@ export default function App() {
   };
 
   const confirmDelete = async () => {
+    // 同一个确认弹窗通过 kind 区分“删除项目”和“删除分组”两条流程。
     if (!confirmation) return;
     if (confirmation.kind === 'project') {
       await notesRepository.deleteProject(confirmation.id);
@@ -339,10 +365,12 @@ export default function App() {
   };
 
   if (fatalError) {
+    // 资料库无法初始化时不渲染正常界面，避免用户继续操作半初始化状态。
     return <div className="fatal-screen"><div className="brand-seal">墨</div><h1>资料库暂时无法打开</h1><p>{fatalError}</p><button onClick={() => window.location.reload()}>重新加载</button></div>;
   }
 
   const layoutStyle = {
+    // CSS 自定义属性把 React 中的可见性和宽度传给三栏布局。
     '--sidebar-width': sidebarVisible ? `${sidebarWidth}px` : '0px',
     '--sidebar-divider': sidebarVisible ? '6px' : '0px',
     '--inspector-width': project && inspectorVisible ? `${inspectorWidth}px` : '0px',
@@ -350,6 +378,7 @@ export default function App() {
   } as CSSProperties;
 
   return (
+    // App 只组合组件和传递数据/回调；具体布局由各组件及 styles.css 完成。
     <div className={`app-shell ${sidebarVisible ? '' : 'sidebar-hidden'} ${project && !inspectorVisible ? 'inspector-hidden' : ''}`} style={layoutStyle}>
       <Sidebar
           projects={library.projects}
@@ -423,6 +452,7 @@ export default function App() {
 }
 
 function WelcomePane({ onNew, onImport, onSample }: { onNew: () => void; onImport: () => void; onSample: () => void }) {
+  // 没有选中项目时显示纯展示型欢迎页，所有动作仍交回 App 处理。
   return (
     <main className="welcome-pane">
       <div className="welcome-pattern" />

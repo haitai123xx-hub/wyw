@@ -1,3 +1,4 @@
+/** 左侧资料库导航：分组、搜索和项目操作菜单。 */
 import { useMemo, useState } from 'react';
 import { BookIcon, ChevronIcon, ExportIcon, FolderIcon, ImportIcon, MoreIcon, PlusIcon, SearchIcon, SettingsIcon, TrashIcon } from '../icons';
 import type { Group, ProjectSummary } from '../types';
@@ -24,6 +25,7 @@ interface SidebarProps {
 }
 
 function formatDate(iso: string) {
+  // 最近一周显示相对日期，更早的项目显示月日。
   const date = new Date(iso);
   const today = new Date();
   const dayMs = 86_400_000;
@@ -52,10 +54,12 @@ export function Sidebar({
   onHide,
   hidden = false,
 }: SidebarProps) {
+  // 搜索词和当前展开的菜单只影响界面，不需要提升到 App。
   const [query, setQuery] = useState('');
   const [openMenu, setOpenMenu] = useState<string | null>(null);
 
   const counts = useMemo(() => {
+    // 每当 projects 改变时重新统计全部、未分组以及各分组数量。
     const result: Record<string, number> = { all: projects.length, ungrouped: 0 };
     projects.forEach((project) => {
       if (project.groupId) result[project.groupId] = (result[project.groupId] ?? 0) + 1;
@@ -65,6 +69,7 @@ export function Sidebar({
   }, [projects]);
 
   const visibleProjects = useMemo(() => {
+    // 先应用分组筛选，再匹配标题、作者、朝代和标签。
     const keyword = query.trim().toLocaleLowerCase();
     return projects.filter((project) => {
       if (activeGroup === 'ungrouped' && project.groupId) return false;
@@ -131,6 +136,7 @@ export function Sidebar({
           </div>
           <div className="project-list">
             {visibleProjects.map((project) => {
+              // 摘要只保存 groupId，渲染时在 groups 中查找名称和颜色。
               const group = groups.find((item) => item.id === project.groupId);
               return (
                 <button
